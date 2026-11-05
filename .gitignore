@@ -1,0 +1,8 @@
+node_modules/
+data/
+server/dist/
+web/dist/
+.tmp-*/
+.tmp-*
+*.log
+.DS_Store
