@@ -5,6 +5,7 @@ export type Section = 'main' | 'matrix' | 'suggest';
 export interface User {
   id: number;
   username: string;
+  roster_login: number;
   name: string;
   department: string;
   role: Role;

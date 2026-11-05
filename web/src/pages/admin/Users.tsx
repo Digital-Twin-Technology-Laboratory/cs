@@ -1,5 +1,6 @@
-import { App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Upload } from 'antd';
+import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, qs } from '../../api';
@@ -19,6 +20,9 @@ export default function Users() {
   const [data, setData] = useState<{ total: number; rows: Row[] }>({ total: 0, rows: [] });
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [files, setFiles] = useState<UploadFile[]>([]);
+  const [importing, setImporting] = useState(false);
   const [resetting, setResetting] = useState<Row | null>(null);
   const [createForm] = Form.useForm();
   const [pwForm] = Form.useForm();
@@ -60,6 +64,25 @@ export default function Users() {
     pwForm.resetFields();
   };
 
+  const importRoster = async () => {
+    const file = files[0]?.originFileObj;
+    if (!file) return message.warning('请选择教工名单文件');
+    const fd = new FormData();
+    fd.append('file', file);
+    setImporting(true);
+    try {
+      const result = await api.post<{ imported: number; skipped: number }>('/api/admin/users/import', fd);
+      message.success(`已导入 ${result.imported} 个教工账号，跳过 ${result.skipped} 个已有工号`);
+      setImportOpen(false);
+      setFiles([]);
+      load();
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="page-head">
@@ -67,13 +90,16 @@ export default function Users() {
           <h1>用户管理</h1>
           <div className="sub">审核注册、启用/停用账号、设置管理员、重置密码，查看各账号的课程与文件</div>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
-          新建账号
-        </Button>
+        <Space wrap>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入教工名单</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+            新建账号
+          </Button>
+        </Space>
       </div>
       <Card styles={{ body: { padding: 0 } }}>
         <Space wrap style={{ padding: 16 }}>
-          <Input.Search placeholder="用户名 / 姓名 / 部门" allowClear onSearch={(q) => (setPage(1), setFilter((f) => ({ ...f, q })))} style={{ width: 240 }} />
+          <Input.Search placeholder="工号 / 用户名 / 姓名 / 部门" allowClear onSearch={(q) => (setPage(1), setFilter((f) => ({ ...f, q })))} style={{ width: 260 }} />
           <Select
             value={filter.status}
             onChange={(status) => (setPage(1), setFilter((f) => ({ ...f, status })))}
@@ -100,11 +126,12 @@ export default function Users() {
           rowKey="id"
           loading={loading}
           dataSource={data.rows}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1200 }}
           pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 个账号` }}
           columns={[
-            { title: '用户名', dataIndex: 'username', render: (v, r) => <>{v} {r.id === me?.id && <Tag>我</Tag>}</> },
+            { title: '用户名 / 工号', dataIndex: 'username', render: (v, r) => <>{v} {r.id === me?.id && <Tag>我</Tag>}</> },
             { title: '姓名', dataIndex: 'name' },
+            { title: '登录方式', width: 100, render: (_, r) => r.roster_login === 1 && r.role === 'user' ? '免密码' : '账号密码' },
             { title: '部门', dataIndex: 'department' },
             { title: '角色', dataIndex: 'role', width: 90, render: (v) => (v === 'admin' ? <Tag color="blue">管理员</Tag> : '普通用户') },
             { title: '状态', dataIndex: 'status', width: 90, render: (v) => <UserStatusTag status={v} /> },
@@ -181,6 +208,37 @@ export default function Users() {
           ]}
         />
       </Card>
+
+      <Modal
+        title="导入教工名单"
+        open={importOpen}
+        onOk={importRoster}
+        onCancel={() => { if (!importing) { setImportOpen(false); setFiles([]); } }}
+        okText="导入名单"
+        confirmLoading={importing}
+        cancelButtonProps={{ disabled: importing }}
+        destroyOnHidden
+      >
+        <Alert
+          type="info"
+          showIcon
+          title="导入后可直接使用工号或姓名登录，无需密码"
+          description="同名教工须使用工号登录。已有工号会跳过，不修改原账号、密码或权限。"
+          style={{ marginBottom: 16 }}
+        />
+        <p>支持 Excel（.xlsx，第一个工作表）或 UTF-8 编码的 CSV。第一行包含“姓名”和“工号”两列，列顺序不限；工号列请设为文本，保留前导零。</p>
+        <Upload.Dragger
+          accept=".xlsx,.csv"
+          maxCount={1}
+          fileList={files}
+          beforeUpload={() => false}
+          onChange={({ fileList }) => setFiles(fileList.slice(-1))}
+          disabled={importing}
+        >
+          <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+          <p className="ant-upload-text">点击或拖拽教工名单到此处</p>
+        </Upload.Dragger>
+      </Modal>
 
       <Modal title="新建账号" open={creating} onOk={create} onCancel={() => setCreating(false)} okText="创建" destroyOnHidden>
         <Form form={createForm} layout="vertical" initialValues={{ role: 'user' }} preserve={false}>

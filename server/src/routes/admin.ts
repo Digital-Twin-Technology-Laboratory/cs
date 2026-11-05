@@ -1,5 +1,8 @@
 import { Router } from 'express';
+import fs from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
+import { CsvError, parse } from 'csv-parse/sync';
+import { InvalidInputError, InvalidSpreadsheetError, readSheet, SheetNotFoundError } from 'read-excel-file/node';
 import { z } from 'zod';
 import { audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
@@ -63,7 +66,7 @@ adminRouter.get('/users', (req, res) => {
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM users u WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db
     .prepare(
-      `SELECT u.id, u.username, u.name, u.department, u.role, u.status, u.created_at, u.last_login_at,
+      `SELECT u.id, u.username, u.name, u.department, u.role, u.status, u.roster_login, u.created_at, u.last_login_at,
         (SELECT COUNT(*) FROM courses WHERE user_id = u.id) AS course_count,
         (SELECT COUNT(*) FROM submissions WHERE user_id = u.id) AS submission_count
        FROM users u WHERE ${w} ORDER BY (u.status = 'pending') DESC, u.id DESC LIMIT ? OFFSET ?`,
@@ -90,6 +93,63 @@ adminRouter.post('/users', (req, res) => {
   res.json({ id: r.lastInsertRowid });
 });
 
+adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, res) => {
+  const file = req.file;
+  try {
+    if (!file) return res.status(400).json({ error: '请选择教工名单文件' });
+    const contents = await fs.readFile(file.path);
+    let rows: unknown[][];
+    try {
+      rows = file.originalname.toLowerCase().endsWith('.xlsx')
+        ? await readSheet(contents, { parseNumber: (value) => value })
+        : parse(contents, { bom: true, trim: true, skip_empty_lines: true });
+    } catch (e) {
+      if (e instanceof CsvError || e instanceof InvalidInputError || e instanceof InvalidSpreadsheetError || e instanceof SheetNotFoundError) {
+        return res.status(400).json({ error: `名单文件解析失败，请检查文件格式：${e.message}` });
+      }
+      throw e;
+    }
+
+    const headers = (rows[0] ?? []).map((cell) => String(cell ?? '').trim());
+    if (headers.filter((cell) => cell === '姓名').length !== 1 || headers.filter((cell) => cell === '工号').length !== 1) {
+      return res.status(400).json({ error: '名单首行必须包含“姓名”和“工号”两列，且列名不能重复' });
+    }
+    const nameColumn = headers.indexOf('姓名');
+    const numberColumn = headers.indexOf('工号');
+    const entrySchema = z.object({
+      name: z.string().min(1, '姓名不能为空').max(50, '姓名最多50个字符'),
+      username: z.string().min(1, '工号不能为空').max(32, '工号最多32个字符').regex(/^[A-Za-z0-9_.@-]+$/, '工号只能包含字母、数字及 _ . @ -'),
+    });
+    const entries: { name: string; username: string }[] = [];
+    const seen = new Set<string>();
+    for (const [index, row] of rows.entries()) {
+      if (index === 0 || row.every((cell) => !String(cell ?? '').trim())) continue;
+      const entry = entrySchema.safeParse({
+        name: String(row[nameColumn] ?? '').trim(),
+        username: String(row[numberColumn] ?? '').trim(),
+      });
+      if (!entry.success) return res.status(400).json({ error: `第 ${index + 1} 行：${entry.error.issues.map((issue) => issue.message).join('；')}` });
+      const key = entry.data.username.toLowerCase();
+      if (seen.has(key)) return res.status(400).json({ error: `第 ${index + 1} 行：工号 ${entry.data.username} 在名单中重复` });
+      seen.add(key);
+      entries.push(entry.data);
+    }
+    if (!entries.length) return res.status(400).json({ error: '名单中没有教工数据' });
+
+    const imported = db.transaction(() => {
+      const insert = db.prepare(
+        "INSERT INTO users (username, password_hash, name, role, status, roster_login) VALUES (?, '', ?, 'user', 'active', 1) ON CONFLICT(username) DO NOTHING",
+      );
+      return entries.reduce((count, entry) => count + insert.run(entry.username, entry.name).changes, 0);
+    })();
+    const skipped = entries.length - imported;
+    audit(req.user, '导入教工名单', file.originalname, `导入 ${imported} 个免密码账号，跳过 ${skipped} 个已有工号`, req.ip);
+    res.json({ imported, skipped });
+  } finally {
+    cleanupTmp(file);
+  }
+});
+
 const activeAdmins = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 adminRouter.put('/users/:id', (req, res) => {
@@ -105,6 +165,9 @@ adminRouter.put('/users/:id', (req, res) => {
     })
     .parse(req.body);
   const next = { ...u, ...body };
+  if (next.role === 'admin' && !u.password_hash) {
+    return res.status(400).json({ error: '该教工账号使用免密码登录，请先重置密码再设为管理员；管理员必须使用密码登录' });
+  }
   if (u.id === req.user!.id && (next.role !== 'admin' || next.status !== 'active')) {
     return res.status(400).json({ error: '不能取消自己的管理员权限或停用自己的账号' });
   }
@@ -112,7 +175,7 @@ adminRouter.put('/users/:id', (req, res) => {
     return res.status(400).json({ error: '系统至少需要保留一个可用的管理员账号' });
   }
   db.prepare('UPDATE users SET name = ?, department = ?, role = ?, status = ? WHERE id = ?').run(next.name, next.department, next.role, next.status, id);
-  if (next.status !== 'active') db.prepare("DELETE FROM sessions WHERE sess LIKE ?").run(`%"userId":${id}}%`);
+  if (next.status !== 'active') db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(id);
   const changes = [
     body.status && body.status !== u.status ? `状态：${u.status}→${body.status}` : '',
     body.role && body.role !== u.role ? `角色：${u.role}→${body.role}` : '',
@@ -140,7 +203,7 @@ adminRouter.delete('/users/:id', (req, res) => {
   const files = db.prepare('SELECT file_path FROM submissions WHERE user_id = ?').all(id) as { file_path: string }[];
   db.transaction(() => {
     db.prepare('DELETE FROM users WHERE id = ?').run(id);
-    db.prepare('DELETE FROM sessions WHERE sess LIKE ?').run(`%"userId":${id}}%`);
+    db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(id);
   })();
   files.forEach((f) => removeFile(f.file_path));
   audit(req.user, '删除账号', u.username, `连带删除 ${files.length} 个上传文件`, req.ip);

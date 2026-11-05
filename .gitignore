@@ -2,6 +2,7 @@ node_modules/
 data/
 server/dist/
 web/dist/
+/开发素材/
 .tmp-*/
 .tmp-*
 *.log

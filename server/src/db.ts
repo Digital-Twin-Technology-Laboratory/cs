@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,
+  roster_login INTEGER NOT NULL DEFAULT 0,
   name TEXT NOT NULL DEFAULT '',
   department TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL DEFAULT 'user',          -- admin | user
@@ -140,6 +141,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 `);
+
+const userColumns = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
+if (!userColumns.some((column) => column.name === 'roster_login')) {
+  db.exec('ALTER TABLE users ADD COLUMN roster_login INTEGER NOT NULL DEFAULT 0');
+}
 
 /** 首次启动写入初始检查清单 */
 function seedChecklist() {

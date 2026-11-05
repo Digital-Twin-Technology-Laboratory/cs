@@ -63,16 +63,29 @@ authRouter.post('/register', (req, res) => {
 });
 
 authRouter.post('/login', (req, res) => {
-  const { username, password } = z.object({ username: z.string().trim(), password: z.string() }).parse(req.body);
+  const { username, password } = z
+    .object({ username: z.string().trim().min(1, '请输入工号或姓名').max(50), password: z.string().optional() })
+    .parse(req.body);
   const key = `${username.toLowerCase()}|${req.ip}`;
   const f = failures.get(key);
   if (f && f.until > Date.now()) return res.status(429).json({ error: '登录失败次数过多，请5分钟后再试' });
 
-  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
-  if (!u || !bcrypt.compareSync(password, u.password_hash)) {
+  let u: UserRow | undefined;
+  if (password === undefined) {
+    u = db.prepare("SELECT * FROM users WHERE username = ? AND roster_login = 1 AND role = 'user'").get(username) as UserRow | undefined;
+    if (!u) {
+      const matches = db.prepare("SELECT * FROM users WHERE name = ? AND roster_login = 1 AND role = 'user'").all(username) as UserRow[];
+      if (matches.length > 1) return res.status(400).json({ error: '存在同名教工，请使用工号登录' });
+      u = matches[0];
+    }
+  } else {
+    u = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
+    if (u && !bcrypt.compareSync(password, u.password_hash)) u = undefined;
+  }
+  if (!u) {
     const n = (f && f.until <= Date.now() && f.n >= 5 ? 0 : f?.n ?? 0) + 1;
     failures.set(key, { n, until: n >= 5 ? Date.now() + 5 * 60_000 : 0 });
-    return res.status(400).json({ error: '用户名或密码错误' });
+    return res.status(400).json({ error: password === undefined ? '未找到该教工，请核对工号或姓名，或联系管理员导入名单' : '用户名或密码错误' });
   }
   failures.delete(key);
   if (u.status === 'pending') return res.status(403).json({ error: '账号正在等待管理员审核' });
@@ -81,6 +94,7 @@ authRouter.post('/login', (req, res) => {
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: '登录失败' });
     req.session.userId = u.id;
+    req.session.passwordless = password === undefined;
     db.prepare("UPDATE users SET last_login_at = datetime('now','localtime') WHERE id = ?").run(u.id);
     audit(u, '登录', undefined, undefined, req.ip);
     res.json({ user: toPublic(u) });
