@@ -6,7 +6,7 @@ import { requireAdmin, toPublic, type UserRow } from '../auth.js';
 import { getSettings, saveSettings, type AiSettings } from '../settings.js';
 import { decrypt, encrypt, mask } from '../services/crypto.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../services/ai/prompt.js';
-import { aiReady, testConnection } from '../services/ai/provider.js';
+import { aiReady, listModels, testConnection } from '../services/ai/provider.js';
 import { loadChecklist } from '../services/checklist.js';
 import { aiStructureChecklist, parseChecklistFile } from '../services/checklistImport.js';
 import { extractFile, ExtractError } from '../services/extract.js';
@@ -467,6 +467,18 @@ const aiBody = z.object({
 });
 
 adminRouter.get('/ai', (_req, res) => res.json(publicAi(getSettings('ai'))));
+
+adminRouter.post('/ai/models', async (req, res) => {
+  const { apiKey, ...body } = aiBody.pick({ provider: true, baseUrl: true, apiKey: true }).parse(req.body);
+  if (body.provider === 'openai' && !body.baseUrl) return res.status(400).json({ error: '请先填写接口地址（Base URL）' });
+  const key = apiKey || decrypt(getSettings('ai').apiKeyEnc);
+  if (!key) return res.status(400).json({ error: '请先填写 API Key' });
+  try {
+    res.json({ models: await listModels(body, key) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
 
 adminRouter.put('/ai', (req, res) => {
   const { apiKey, ...body } = aiBody.parse(req.body);

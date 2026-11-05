@@ -1,5 +1,5 @@
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Radio, Row, Select, Space, Switch, Tag } from 'antd';
-import { ApiOutlined } from '@ant-design/icons';
+import { Alert, App, AutoComplete, Button, Card, Col, Form, Input, InputNumber, Radio, Row, Select, Space, Switch, Tag } from 'antd';
+import { ApiOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 
@@ -35,6 +35,9 @@ export default function AiConfig() {
   const [s, setS] = useState<AiSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const provider = Form.useWatch('provider', form);
 
@@ -45,15 +48,33 @@ export default function AiConfig() {
     });
   }, [form]);
 
-  const values = async () => {
-    const v = await form.validateFields();
-    return { ...v, apiKey: v.apiKey || undefined };
+  const values = async (fields?: string[]) => {
+    const v = await form.validateFields(fields).catch(({ errorFields }: { errorFields: { errors: string[] }[] }) => {
+      throw new Error(errorFields.flatMap((field) => field.errors).join('；'));
+    });
+    return { ...v, apiKey: v.apiKey?.trim() || undefined };
+  };
+
+  const fetchModels = async () => {
+    setFetchingModels(true);
+    setModelsError(null);
+    try {
+      const v = await values(['provider', 'baseUrl', 'apiKey']);
+      const r = await api.post<{ models: string[] }>('/api/admin/ai/models', v);
+      setModels(r.models);
+      if (!r.models.length) setModelsError('接口未返回可用模型，请手动填写模型名称，或检查 API Key 的模型访问权限。');
+      else message.success(`已获取 ${r.models.length} 个模型，请搜索选择`);
+    } catch (e) {
+      setModelsError((e as Error).message);
+    } finally {
+      setFetchingModels(false);
+    }
   };
 
   const save = async () => {
-    const v = await values();
     setSaving(true);
     try {
+      const v = await values();
       const r = await api.put<AiSettings>('/api/admin/ai', v);
       setS(r);
       form.setFieldsValue({ apiKey: '' });
@@ -66,10 +87,10 @@ export default function AiConfig() {
   };
 
   const test = async () => {
-    const v = await values();
     setTesting(true);
     setTestResult(null);
     try {
+      const v = await values();
       const r = await api.post<{ reply: string; model: string; ms: number }>('/api/admin/ai/test', v);
       setTestResult({ ok: true, text: `连接成功（${r.model}，${(r.ms / 1000).toFixed(1)} 秒）：${r.reply}` });
     } catch (e) {
@@ -79,35 +100,40 @@ export default function AiConfig() {
     }
   };
 
-  const onProviderChange = (p: string) => {
-    if (p === 'anthropic') {
-      form.setFieldsValue({ baseUrl: '', model: form.getFieldValue('model') || 'claude-opus-5-5' });
-    }
-  };
-
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>AI 配置</h1>
-          <div className="sub">配置用于检查大纲的模型。内部使用，不设额度限制。API Key 加密保存，页面只显示掩码。</div>
+          <div className="sub">填写接口和 API Key，获取并选择模型，测试连接后保存。API Key 加密保存，页面只显示掩码。</div>
         </div>
         <Space>
-          <Button icon={<ApiOutlined />} loading={testing} onClick={test}>
+          <Button icon={<ApiOutlined />} loading={testing} disabled={!s || saving || fetchingModels} onClick={test}>
             测试连接
           </Button>
-          <Button type="primary" loading={saving} onClick={save}>
-            保存
+          <Button type="primary" loading={saving} disabled={!s || testing || fetchingModels} onClick={save}>
+            保存配置
           </Button>
         </Space>
       </div>
       {testResult && <Alert type={testResult.ok ? 'success' : 'error'} showIcon title={testResult.text} style={{ marginBottom: 16 }} closable onClose={() => setTestResult(null)} />}
-      <Form form={form} layout="vertical" disabled={!s}>
+      <Form
+        form={form}
+        layout="vertical"
+        disabled={!s || saving || testing || fetchingModels}
+        onValuesChange={(changed) => {
+          setTestResult(null);
+          if (['provider', 'baseUrl', 'apiKey'].some((key) => key in changed)) {
+            setModels([]);
+            setModelsError(null);
+          }
+        }}
+      >
         <Space orientation="vertical" size={16} style={{ width: '100%' }}>
           <Card title="模型接口">
             <Form.Item label="接口类型" name="provider">
               <Radio.Group
-                onChange={(e) => onProviderChange(e.target.value)}
+                onChange={() => form.setFieldsValue({ baseUrl: '', model: '' })}
                 options={[
                   { value: 'openai', label: 'OpenAI 兼容接口（DeepSeek、通义千问、Kimi、智谱等）' },
                   { value: 'anthropic', label: 'Anthropic Claude' },
@@ -131,7 +157,12 @@ export default function AiConfig() {
                     <Select
                       placeholder="选择服务商填入接口地址"
                       options={PRESETS.map((p) => ({ value: p.baseUrl, label: p.label }))}
-                      onChange={(v) => form.setFieldsValue({ baseUrl: v })}
+                      onChange={(v) => {
+                        form.setFieldsValue({ baseUrl: v, model: '' });
+                        setModels([]);
+                        setModelsError(null);
+                        setTestResult(null);
+                      }}
                     />
                   </Form.Item>
                 </Col>
@@ -146,17 +177,36 @@ export default function AiConfig() {
                     </>
                   }
                   name="apiKey"
+                  rules={[{ required: !s?.hasKey, whitespace: true, message: '请填写 API Key' }]}
                   extra={s?.hasKey ? '留空表示不修改' : undefined}
                 >
                   <Input.Password placeholder={s?.hasKey ? '输入新的 Key 以替换' : '请输入 API Key'} autoComplete="off" />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
-                <Form.Item label="模型名称" name="model" rules={[{ required: true, message: '请填写模型名称' }]} extra={provider === 'anthropic' ? '如 claude-opus-5-5、claude-sonnet-5-5' : '以服务商控制台中的模型名称为准'}>
-                  <Input />
+                <Form.Item
+                  label="模型名称"
+                  required
+                  extra={models.length ? `已获取 ${models.length} 个模型，可搜索选择或手动输入。可用性以测试连接为准。` : '先获取模型列表再选择，也可直接填写服务商提供的模型名称。'}
+                >
+                  <Space.Compact style={{ width: '100%' }}>
+                    <Form.Item name="model" noStyle rules={[{ required: true, whitespace: true, message: '请选择或填写模型名称' }]}>
+                      <AutoComplete
+                        style={{ flex: 1, minWidth: 0 }}
+                        options={models.map((model) => ({ value: model }))}
+                        filterOption={(input, option) => option!.value.toLowerCase().includes(input.toLowerCase())}
+                        placeholder="搜索或输入模型名称"
+                        allowClear
+                      />
+                    </Form.Item>
+                    <Button icon={<ReloadOutlined />} loading={fetchingModels} onClick={fetchModels}>
+                      获取模型
+                    </Button>
+                  </Space.Compact>
                 </Form.Item>
               </Col>
             </Row>
+            {modelsError && <Alert type="warning" showIcon title={modelsError} description="获取列表失败不影响手动填写模型；填写后可点击「测试连接」验证。" />}
           </Card>
 
           <Card title="参数">

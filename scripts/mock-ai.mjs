@@ -50,6 +50,14 @@ http
     let body = '';
     req.on('data', (d) => (body += d));
     req.on('end', () => {
+      if (req.method === 'GET' && req.url === '/v1/models') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          object: 'list',
+          data: ['mock-chat', 'mock-reasoner'].map((id) => ({ id, object: 'model', created: 0, owned_by: 'mock' })),
+        }));
+        return;
+      }
       if (!req.url.endsWith('/chat/completions')) {
         res.writeHead(404).end();
         return;

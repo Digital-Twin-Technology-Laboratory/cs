@@ -1,3 +1,5 @@
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { getSettings, type AiSettings } from '../../settings.js';
 import { decrypt } from '../crypto.js';
 import { callOpenAICompatible, describeOpenAIError } from './openai.js';
@@ -36,6 +38,25 @@ export function aiReady(s: AiSettings = getSettings('ai')): string | null {
 
 export function effectiveSystemPrompt(s: AiSettings = getSettings('ai')) {
   return s.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT;
+}
+
+export async function listModels(settings: Pick<AiSettings, 'provider' | 'baseUrl'>, apiKey: string): Promise<string[]> {
+  try {
+    const options = { apiKey, baseURL: settings.baseUrl || undefined, timeout: 30_000, maxRetries: 0 };
+    const models = settings.provider === 'anthropic'
+      ? new Anthropic(options).models.list()
+      : new OpenAI(options).models.list();
+    const ids = new Set<string>();
+    for await (const model of models) ids.add(model.id);
+    return [...ids].sort((a, b) => a.localeCompare(b));
+  } catch (e) {
+    if (e instanceof OpenAI.NotFoundError || e instanceof Anthropic.NotFoundError) {
+      throw new Error('模型列表接口不存在，请检查接口地址；服务商不支持获取模型时，可手动填写模型名称');
+    }
+    const msg = describeAnthropicError(e) ?? describeOpenAIError(e);
+    if (msg) throw new Error(msg);
+    throw e;
+  }
 }
 
 export async function callAi(
