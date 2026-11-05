@@ -4,25 +4,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { Dayjs } from 'dayjs';
 import { api, download, qs } from '../../api';
-import { SubmissionTag } from '../../components/StatusTag';
+import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import { fmtSize } from '../user/CourseDetail';
-import type { CourseRow, SubStatus } from '../../types';
+import type { CourseRow, SubmissionRow } from '../../types';
 
-interface SubRow {
-  id: number;
-  seq: number;
-  course_id: number;
-  file_name: string;
-  file_size: number;
-  status: SubStatus;
-  verdict: 'passed' | 'failed' | null;
-  error: string | null;
+interface SubRow extends SubmissionRow {
   ai_model: string | null;
-  created_at: string;
   plan_name: string | null;
-  course_name: string;
-  major: string;
-  training_type: string;
   user_id: number;
   username: string;
   user_name: string;
@@ -42,7 +30,7 @@ function useAct(reload: () => void) {
 }
 
 function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialStatus?: string }) {
-  const [f, setF] = useState({ q: '', status: initialStatus ?? '', verdict: '', from: '', to: '' });
+  const [f, setF] = useState({ q: '', status: initialStatus ?? '', verdict: '', confirmation: '', from: '', to: '' });
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ total: number; rows: SubRow[] }>({ total: 0, rows: [] });
   const [loading, setLoading] = useState(false);
@@ -87,6 +75,17 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
               { value: 'failed', label: '未通过' },
             ]}
           />
+          <Select
+            aria-label="结果上传状态"
+            value={f.confirmation}
+            onChange={(confirmation) => set({ confirmation })}
+            style={{ width: 150 }}
+            options={[
+              { value: '', label: '全部结果上传状态' },
+              { value: 'pending', label: '未确认上传' },
+              { value: 'confirmed', label: '已确认上传' },
+            ]}
+          />
           <DatePicker.RangePicker
             onChange={(v) => set({ from: (v?.[0] as Dayjs | null)?.format('YYYY-MM-DD') ?? '', to: (v?.[1] as Dayjs | null)?.format('YYYY-MM-DD') ?? '' })}
           />
@@ -100,12 +99,13 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
         size="middle"
         loading={loading}
         dataSource={data.rows}
-        scroll={{ x: 1200 }}
+        scroll={{ x: 1500 }}
         pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 条` }}
         columns={[
           { title: '课程', dataIndex: 'course_name', render: (v, r) => <Link to={`/submissions/${r.id}`}>{v}</Link> },
           { title: '次数', dataIndex: 'seq', width: 75, render: (v) => `第${v}次` },
           { title: '专业 / 类型', width: 180, render: (_, r) => `${r.major} / ${r.training_type}` },
+          { title: '年级', dataIndex: 'student_grade', width: 80, render: (v) => `${String(v).slice(-2)}级` },
           { title: '提交人', width: 150, render: (_, r) => `${r.user_name}（${r.username}）` },
           {
             title: '文件',
@@ -132,7 +132,8 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
               ),
           },
           { title: '对照方案', dataIndex: 'plan_name', width: 120, render: (v) => (v ? <Tooltip title={v}><Tag color="green">已对照</Tag></Tooltip> : <Tag>未预置</Tag>) },
-          { title: '提交时间', dataIndex: 'created_at', width: 165 },
+          { title: '结果上传状态', width: 165, render: (_, r) => <><ConfirmationTag confirmedAt={r.confirmed_at} status={r.status} />{r.confirmed_at && <div className="muted small">{r.confirmed_at}</div>}</> },
+          { title: '文件上传时间', dataIndex: 'created_at', width: 165 },
           {
             title: '操作',
             width: 230,
@@ -248,7 +249,7 @@ function CoursesTab({ userId }: { userId?: string }) {
 export default function Records() {
   const [params, setParams] = useSearchParams();
   const userId = params.get('userId') ?? undefined;
-  const tab = params.get('tab') ?? 'courses';
+  const tab = params.get('tab') ?? 'submissions';
   return (
     <div className="page">
       <div className="page-head">

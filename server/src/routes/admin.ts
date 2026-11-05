@@ -240,23 +240,29 @@ adminRouter.delete('/courses/:id', (req, res) => {
 });
 
 adminRouter.get('/submissions', (req, res) => {
-  const { q = '', status = '', verdict = '', userId = '', from = '', to = '' } = req.query as Record<string, string>;
+  const { q = '', status = '', verdict = '', userId = '', from = '', to = '', confirmation = '' } = req.query as Record<string, string>;
   const { page, pageSize, offset } = paging(req.query);
   const where = ['1=1'];
   const args: unknown[] = [];
-  if (q) where.push('(c.name LIKE ? OR c.major LIKE ? OR u.name LIKE ? OR u.username LIKE ? OR s.file_name LIKE ?)'), args.push(...Array(5).fill(`%${q}%`));
+  if (q) where.push("(json_extract(s.course_snapshot, '$.name') LIKE ? OR json_extract(s.course_snapshot, '$.major') LIKE ? OR u.name LIKE ? OR u.username LIKE ? OR s.file_name LIKE ?)"), args.push(...Array(5).fill(`%${q}%`));
   if (status) where.push('s.status = ?'), args.push(status);
   if (verdict) where.push('s.verdict = ?'), args.push(verdict);
   if (userId) where.push('s.user_id = ?'), args.push(Number(userId));
   if (from) where.push('date(s.created_at) >= ?'), args.push(from);
   if (to) where.push('date(s.created_at) <= ?'), args.push(to);
+  if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
+  if (confirmation === 'confirmed') where.push('s.confirmed_at IS NOT NULL');
   const w = where.join(' AND ');
-  const join = 'FROM submissions s JOIN courses c ON c.id = s.course_id JOIN users u ON u.id = s.user_id';
+  const join = 'FROM submissions s JOIN users u ON u.id = s.user_id';
   const total = (db.prepare(`SELECT COUNT(*) AS n ${join} WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db
     .prepare(
-      `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error, s.ai_model, s.created_at, s.finished_at, s.plan_name,
-        c.name AS course_name, c.major, c.training_type, u.id AS user_id, u.username, u.name AS user_name
+      `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error, s.ai_model, s.created_at, s.finished_at, s.confirmed_at, s.plan_name,
+        json_extract(s.course_snapshot, '$.name') AS course_name,
+        json_extract(s.course_snapshot, '$.major') AS major,
+        json_extract(s.course_snapshot, '$.trainingType') AS training_type,
+        json_extract(s.course_snapshot, '$.studentGrade') AS student_grade,
+        u.id AS user_id, u.username, u.name AS user_name
        ${join} WHERE ${w} ORDER BY s.id DESC LIMIT ? OFFSET ?`,
     )
     .all(...args, pageSize, offset);

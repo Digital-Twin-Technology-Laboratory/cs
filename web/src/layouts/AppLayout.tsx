@@ -7,11 +7,11 @@ export default function AppLayout() {
   const { user, site, logout } = useAuth();
   const loc = useLocation();
   const nav = useNavigate();
-  const first = '/' + (loc.pathname.split('/')[1] || 'courses');
-  const selected = first === '/submissions' ? '/courses' : first;
+  const selected = '/' + (loc.pathname.split('/')[1] || 'courses');
 
   const items = [
     { key: '/upload', label: <Link to="/upload">上传检查</Link> },
+    { key: '/submissions', label: <Link to="/submissions">上传记录</Link> },
     { key: '/courses', label: <Link to="/courses">我的课程</Link> },
     { key: '/checklist', label: <Link to="/checklist">检查清单</Link> },
     ...(user?.role === 'admin' ? [{ key: '/admin', label: <Link to="/admin">管理后台</Link> }] : []),

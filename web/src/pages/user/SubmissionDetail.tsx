@@ -1,5 +1,5 @@
-import { Alert, App, Breadcrumb, Button, Card, Result, Space, Spin } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Alert, App, Breadcrumb, Button, Card, Popconfirm, Result, Space, Spin } from 'antd';
+import { CheckOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api';
@@ -19,6 +19,7 @@ export default function SubmissionDetail() {
   const { message } = App.useApp();
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const load = useCallback(
     () =>
@@ -30,6 +31,7 @@ export default function SubmissionDetail() {
   );
   useEffect(() => {
     setData(null);
+    setError(null);
     load();
   }, [load]);
   const status = data?.submission.status;
@@ -39,10 +41,23 @@ export default function SubmissionDetail() {
     return () => clearInterval(t);
   }, [status, load]);
 
-  if (error) return <div className="page"><Result status="404" title={error} extra={<Link to="/courses">返回我的课程</Link>} /></div>;
+  if (error) return <div className="page"><Result status="404" title={error} extra={<Link to="/submissions">返回上传记录</Link>} /></div>;
   if (!data) return <div className="page" style={{ textAlign: 'center', paddingTop: 80 }}><Spin /></div>;
   const s = data.submission;
   const isOther = s.user_id !== user?.id;
+
+  const confirm = async () => {
+    setConfirming(true);
+    try {
+      const { confirmedAt } = await api.post<{ confirmedAt: string }>(`/api/submissions/${s.id}/confirm`);
+      setData((prev) => prev && { ...prev, submission: { ...prev.submission, confirmed_at: confirmedAt } });
+      message.success('检查结果已确认上传');
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setConfirming(false);
+    }
+  };
 
   const recheck = async () => {
     try {
@@ -60,7 +75,7 @@ export default function SubmissionDetail() {
         className="no-print"
         style={{ marginBottom: 12 }}
         items={[
-          isOther ? { title: <Link to="/admin/records">文件与检查记录</Link> } : { title: <Link to="/courses">我的课程</Link> },
+          isOther ? { title: <Link to="/admin/records?tab=submissions">文件与检查记录</Link> } : { title: <Link to="/submissions">上传记录</Link> },
           { title: isOther ? s.course.name : <Link to={`/courses/${s.course_id}`}>{s.course.name}</Link> },
           { title: `第${s.seq}次检查` },
         ]}
@@ -77,18 +92,32 @@ export default function SubmissionDetail() {
         <Card className="no-print">
           <SubmissionMeta sub={s} />
         </Card>
+        {s.status === 'done' && (
+          <Alert
+            className="no-print"
+            type={s.confirmed_at ? 'success' : 'info'}
+            showIcon
+            title={s.confirmed_at ? '检查结果已确认上传' : '检查已完成，结果尚未确认上传'}
+            description={s.confirmed_at ? `确认时间：${s.confirmed_at}` : isOther ? '等待上传者查看结果并确认上传。' : '请先查看下方检查结果。确认后保存本次结果及确认时间，不会改变检查结论。'}
+            action={!isOther && !s.confirmed_at && (
+              <Popconfirm title="确认上传本次检查结果？" description="将按当前检查结论保存确认状态。" okText="确认上传" onConfirm={confirm} okButtonProps={{ loading: confirming }}>
+                <Button type="primary" icon={<CheckOutlined />} loading={confirming}>确认上传结果</Button>
+              </Popconfirm>
+            )}
+          />
+        )}
         {s.status === 'queued' && (
           <Card>
             <Result
               icon={<Spin size="large" />}
               title="排队等待检查"
-              subTitle={`前方还有 ${Math.max(0, (s.queuePosition ?? 1) - 1)} 份大纲，页面会自动刷新。可以离开本页，稍后在“我的课程”中查看结果。`}
+              subTitle={`前方还有 ${Math.max(0, (s.queuePosition ?? 1) - 1)} 份大纲，页面会自动刷新。可以离开本页，稍后在“上传记录”中查看结果。`}
             />
           </Card>
         )}
         {s.status === 'running' && (
           <Card>
-            <Result icon={<Spin size="large" />} title="AI 正在检查" subTitle="通常需要 1–5 分钟，页面会自动刷新。可以离开本页，稍后在“我的课程”中查看结果。" />
+            <Result icon={<Spin size="large" />} title="AI 正在检查" subTitle="通常需要 1–5 分钟，页面会自动刷新。可以离开本页，稍后在“上传记录”中查看结果。" />
           </Card>
         )}
         {s.status === 'failed' && (

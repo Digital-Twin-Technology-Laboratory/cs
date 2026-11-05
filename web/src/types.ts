@@ -77,6 +77,7 @@ export interface SubmissionDetail {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  confirmed_at: string | null;
   course: CourseInfo;
   result: CheckResult | null;
   queuePosition: number | null;
@@ -100,10 +101,30 @@ export interface CourseRow {
   latest_status: SubStatus | null;
   latest_verdict: 'passed' | 'failed' | null;
   latest_at: string | null;
+  latest_confirmed_at: string | null;
+}
+
+export interface SubmissionRow {
+  id: number;
+  seq: number;
+  course_id: number;
+  file_name: string;
+  file_size: number;
+  status: SubStatus;
+  verdict: 'passed' | 'failed' | null;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+  confirmed_at: string | null;
+  course_name: string;
+  major: string;
+  training_type: string;
+  student_grade: number;
 }
 
 export interface Options {
   majors: string[];
+  studentGrades: number[];
   plans: { major: string; training_type: string; grade: number; name: string }[];
   trainingTypes: string[];
   maxUploadMB: number;

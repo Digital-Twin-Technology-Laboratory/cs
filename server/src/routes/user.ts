@@ -16,11 +16,13 @@ export const userRouter = Router();
 userRouter.use(requireAuth);
 
 const thisYear = new Date().getFullYear();
+const majors = ['计算机科学与技术', '人工智能', '物联网工程', '中外物联网'] as const;
+const studentGrades = [2023, 2024, 2025, 2026];
 export const courseSchema = z.object({
   name: z.string().trim().min(1, '请填写课程名称').max(100),
-  major: z.string().trim().min(1, '请填写专业').max(100),
+  major: z.enum(majors, { error: '请选择指定的专业' }),
   trainingType: z.string().trim().min(1, '请选择培养类型').max(50),
-  studentGrade: z.coerce.number().int().min(2000).max(thisYear + 5),
+  studentGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择23、24、25或26级'),
   planGrade: z.coerce.number().int().min(2000).max(thisYear + 5).default(2025),
   adjustNote: z.string().trim().max(500).default(''),
 });
@@ -42,7 +44,8 @@ userRouter.get('/options', (_req, res) => {
     .all() as { major: string; training_type: string; grade: number; name: string }[];
   const site = getSettings('site');
   res.json({
-    majors: [...new Set(plans.map((p) => p.major))],
+    majors,
+    studentGrades,
     plans,
     trainingTypes: site.trainingTypes,
     maxUploadMB: site.maxUploadMB,
@@ -73,7 +76,8 @@ function getOwnCourse(req: Request, res: Response): CourseRow | null {
 export const COURSE_LIST_SQL = `
   SELECT c.*, u.username, u.name AS user_name,
     (SELECT COUNT(*) FROM submissions s WHERE s.course_id = c.id) AS submission_count,
-    ls.id AS latest_id, ls.status AS latest_status, ls.verdict AS latest_verdict, ls.created_at AS latest_at
+    ls.id AS latest_id, ls.status AS latest_status, ls.verdict AS latest_verdict, ls.created_at AS latest_at,
+    ls.confirmed_at AS latest_confirmed_at
   FROM courses c
   JOIN users u ON u.id = c.user_id
   LEFT JOIN submissions ls ON ls.id = (SELECT MAX(id) FROM submissions WHERE course_id = c.id)`;
@@ -87,7 +91,7 @@ userRouter.get('/courses/:id', (req, res) => {
   const c = getOwnCourse(req, res);
   if (!c) return;
   const subs = db
-    .prepare('SELECT id, seq, file_name, file_size, status, verdict, error, created_at, finished_at FROM submissions WHERE course_id = ? ORDER BY id DESC')
+    .prepare('SELECT id, seq, file_name, file_size, status, verdict, error, created_at, finished_at, confirmed_at FROM submissions WHERE course_id = ? ORDER BY id DESC')
     .all(c.id);
   const plan = findPlan(c.major, c.training_type, c.plan_grade);
   res.json({ course: c, submissions: subs, plan: plan ? { id: plan.id, name: plan.name } : null });
@@ -174,6 +178,7 @@ type SubFull = {
   id: number; course_id: number; user_id: number; seq: number; file_name: string; file_path: string; file_size: number;
   checklist_version_id: number | null; plan_id: number | null; plan_name: string | null; course_snapshot: string; ai_model: string | null;
   status: string; error: string | null; verdict: 'passed' | 'failed' | null; result_json: string | null; created_at: string; started_at: string | null; finished_at: string | null;
+  confirmed_at: string | null;
 };
 
 function getOwnSub(req: Request, res: Response): SubFull | null {
@@ -184,6 +189,37 @@ function getOwnSub(req: Request, res: Response): SubFull | null {
   }
   return s;
 }
+
+userRouter.get('/submissions', (req, res) => {
+  const { page, pageSize, q, status, confirmation } = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(200).default(20),
+    q: z.string().trim().max(200).default(''),
+    status: z.enum(['queued', 'running', 'done', 'failed']).optional(),
+    confirmation: z.enum(['pending', 'confirmed']).optional(),
+  }).parse(req.query);
+  const where = ['s.user_id = ?'];
+  const args: unknown[] = [req.user!.id];
+  if (q) {
+    where.push("(json_extract(s.course_snapshot, '$.name') LIKE ? OR json_extract(s.course_snapshot, '$.major') LIKE ? OR s.file_name LIKE ?)");
+    args.push(...Array(3).fill(`%${q}%`));
+  }
+  if (status) where.push('s.status = ?'), args.push(status);
+  if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
+  if (confirmation === 'confirmed') where.push('s.confirmed_at IS NOT NULL');
+  const w = where.join(' AND ');
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM submissions s WHERE ${w}`).get(...args) as { n: number }).n;
+  const rows = db.prepare(
+    `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error,
+      s.created_at, s.finished_at, s.confirmed_at,
+      json_extract(s.course_snapshot, '$.name') AS course_name,
+      json_extract(s.course_snapshot, '$.major') AS major,
+      json_extract(s.course_snapshot, '$.trainingType') AS training_type,
+      json_extract(s.course_snapshot, '$.studentGrade') AS student_grade
+     FROM submissions s WHERE ${w} ORDER BY s.id DESC LIMIT ? OFFSET ?`,
+  ).all(...args, pageSize, (page - 1) * pageSize);
+  res.json({ total, rows });
+});
 
 userRouter.get('/submissions/:id', (req, res) => {
   const s = getOwnSub(req, res);
@@ -203,6 +239,21 @@ userRouter.get('/submissions/:id', (req, res) => {
       : null,
     sections: SECTION_META,
   });
+});
+
+userRouter.post('/submissions/:id/confirm', (req, res) => {
+  const s = getOwnSub(req, res);
+  if (!s) return;
+  if (s.user_id !== req.user!.id) return res.status(403).json({ error: '只能确认上传自己的检查结果' });
+  if (s.status !== 'done' || !s.result_json || !s.verdict) {
+    return res.status(400).json({ error: '检查完成后才能确认上传结果' });
+  }
+  const confirmedAt = db.transaction(() => {
+    const updated = db.prepare("UPDATE submissions SET confirmed_at = datetime('now','localtime') WHERE id = ? AND confirmed_at IS NULL").run(s.id);
+    if (updated.changes) audit(req.user, '确认上传结果', `记录#${s.id}`, undefined, req.ip);
+    return (db.prepare('SELECT confirmed_at FROM submissions WHERE id = ?').get(s.id) as { confirmed_at: string }).confirmed_at;
+  })();
+  res.json({ ok: true, confirmedAt });
 });
 
 userRouter.get('/submissions/:id/file', (req, res) => {

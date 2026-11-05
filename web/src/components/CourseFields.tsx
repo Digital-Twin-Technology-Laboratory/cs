@@ -1,8 +1,7 @@
-import { AutoComplete, Col, Form, Input, InputNumber, Row, Select } from 'antd';
+import { Col, Form, Input, InputNumber, Row, Select } from 'antd';
 import type { Options } from '../types';
 
 const thisYear = new Date().getFullYear();
-const gradeOptions = Array.from({ length: thisYear - 2018 + 2 }, (_, i) => thisYear + 1 - i).map((y) => ({ value: y, label: `${y}级` }));
 
 /** 课程信息表单项：学生年级与对照方案年级分开填写，对照方案默认2025级 */
 export default function CourseFields({ options }: { options: Options | null }) {
@@ -15,11 +14,10 @@ export default function CourseFields({ options }: { options: Options | null }) {
       </Form.Item>
       <Row gutter={16}>
         <Col xs={24} md={12}>
-          <Form.Item label="专业" name="major" rules={[{ required: true, message: '请填写专业' }]} extra="请使用培养方案中的专业全称">
-            <AutoComplete
-              options={(options?.majors ?? []).map((m) => ({ value: m }))}
-              placeholder="选择或输入专业"
-              filterOption={(input, opt) => String(opt?.value ?? '').includes(input)}
+          <Form.Item label="专业" name="major" rules={[{ required: true, message: '请选择专业' }]}>
+            <Select
+              options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))}
+              placeholder="请选择专业"
             />
           </Form.Item>
         </Col>
@@ -32,7 +30,7 @@ export default function CourseFields({ options }: { options: Options | null }) {
       <Row gutter={16}>
         <Col xs={24} md={12}>
           <Form.Item label="学生年级" name="studentGrade" rules={[{ required: true, message: '请选择学生年级' }]}>
-            <Select options={gradeOptions} placeholder="授课对象所属年级" showSearch />
+            <Select options={(options?.studentGrades ?? []).map((y) => ({ value: y, label: `${String(y).slice(-2)}级` }))} placeholder="请选择年级" />
           </Form.Item>
         </Col>
         <Col xs={24} md={12}>

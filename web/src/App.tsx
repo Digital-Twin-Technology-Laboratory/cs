@@ -9,6 +9,7 @@ import Upload from './pages/user/Upload';
 import Courses from './pages/user/Courses';
 import CourseDetail from './pages/user/CourseDetail';
 import SubmissionDetail from './pages/user/SubmissionDetail';
+import Submissions from './pages/user/Submissions';
 import ChecklistPage from './pages/user/ChecklistPage';
 import Profile from './pages/user/Profile';
 import Dashboard from './pages/admin/Dashboard';
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="upload" element={<Upload />} />
         <Route path="courses" element={<Courses />} />
         <Route path="courses/:id" element={<CourseDetail />} />
+        <Route path="submissions" element={<Submissions />} />
         <Route path="submissions/:id" element={<SubmissionDetail />} />
         <Route path="checklist" element={<ChecklistPage />} />
         <Route path="profile" element={<Profile />} />

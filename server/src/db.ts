@@ -126,7 +126,8 @@ CREATE TABLE IF NOT EXISTS submissions (
   result_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   started_at TEXT,
-  finished_at TEXT
+  finished_at TEXT,
+  confirmed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sub_course ON submissions(course_id);
 CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
@@ -145,6 +146,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 const userColumns = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
 if (!userColumns.some((column) => column.name === 'roster_login')) {
   db.exec('ALTER TABLE users ADD COLUMN roster_login INTEGER NOT NULL DEFAULT 0');
+}
+
+const submissionColumns = db.prepare('PRAGMA table_info(submissions)').all() as { name: string }[];
+if (!submissionColumns.some((column) => column.name === 'confirmed_at')) {
+  db.exec('ALTER TABLE submissions ADD COLUMN confirmed_at TEXT');
 }
 
 /** 首次启动写入初始检查清单 */
