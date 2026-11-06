@@ -27,7 +27,7 @@ export interface AiSettings {
 
 const DEFAULTS = {
   site: {
-    siteName: '本科教学大纲检查系统',
+    siteName: '教学材料检查系统',
     registrationMode: 'open',
     maxUploadMB: 20,
     trainingTypes: ['普通本科', '专转本'],

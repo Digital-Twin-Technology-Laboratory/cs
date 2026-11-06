@@ -143,6 +143,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 `);
 
+db.prepare(`
+  UPDATE settings
+  SET value = json_set(value, '$.siteName', ?)
+  WHERE key = 'site' AND json_extract(value, '$.siteName') = ?
+`).run('教学材料检查系统', '本科教学大纲检查系统');
+
 const userColumns = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
 if (!userColumns.some((column) => column.name === 'roster_login')) {
   db.exec('ALTER TABLE users ADD COLUMN roster_login INTEGER NOT NULL DEFAULT 0');

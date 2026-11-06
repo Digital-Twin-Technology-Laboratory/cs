@@ -45,6 +45,6 @@ app.listen(PORT, HOST, () => {
     .flat()
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => `http://${i!.address}:${PORT}`);
-  console.log(`教学大纲检查系统已启动：http://localhost:${PORT}`);
+  console.log(`教学材料检查系统已启动：http://localhost:${PORT}`);
   if (lan.length) console.log(`局域网访问：${lan.join('  ')}`);
 });
