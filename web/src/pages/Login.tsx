@@ -1,6 +1,6 @@
 import { App, Button, Card, Form, Input, Segmented } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -20,19 +20,26 @@ export function AuthTitle({ sub }: { sub: string }) {
 }
 
 export default function Login() {
-  const { setUser, site } = useAuth();
-  const nav = useNavigate();
+  const { user, setUser, site } = useAuth();
   const loc = useLocation();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<'staff' | 'password'>('staff');
+  const [mode, setMode] = useState<'first' | 'password'>('password');
+  const [redirectTo, setRedirectTo] = useState((loc.state as { from?: string } | null)?.from || '/');
 
-  const onFinish = async (v: { username: string; password?: string }) => {
+  const onFinish = async (v: { username: string; password?: string; name?: string }) => {
     setLoading(true);
     try {
-      const r = await api.post<{ user: User }>('/api/auth/login', mode === 'staff' ? { username: v.username } : v);
+      const r = await api.post<{ user: User; initialPassword?: string }>('/api/auth/login', v);
+      if (r.initialPassword) {
+        setRedirectTo('/profile');
+        modal.info({
+          title: '首次登录成功',
+          content: <div className="prose">您的初始密码是 <strong>{r.initialPassword}</strong>。<br />请在个人设置中修改密码。下次请使用工号或姓名，加上密码登录；同名时请使用工号。</div>,
+          okText: '我知道了',
+        });
+      }
       setUser(r.user);
-      nav((loc.state as { from?: string } | null)?.from || '/', { replace: true });
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -40,6 +47,7 @@ export default function Login() {
     }
   };
 
+  if (user) return <Navigate to={redirectTo} replace />;
   const canRegister = !site?.hasUsers || site.registrationMode !== 'closed';
 
   return (
@@ -52,23 +60,30 @@ export default function Login() {
             size="large"
             value={mode}
             onChange={setMode}
-            options={[{ label: '教工登录', value: 'staff' }, { label: '账号密码登录', value: 'password' }]}
+            options={[{ label: '密码登录', value: 'password' }, { label: '教工首次登录', value: 'first' }]}
             style={{ marginBottom: 20 }}
           />
           <Form layout="vertical" onFinish={onFinish} requiredMark={false} size="large">
-            <Form.Item name="username" rules={[{ required: true, message: mode === 'staff' ? '请输入工号或姓名' : '请输入用户名' }]}>
-              <Input prefix={<UserOutlined />} placeholder={mode === 'staff' ? '工号或姓名' : '用户名'} autoComplete="username" autoFocus />
+            <Form.Item name="username" rules={[{ required: true, message: mode === 'first' ? '请输入工号' : '请输入工号、姓名或用户名' }]}>
+              <Input prefix={<UserOutlined />} placeholder={mode === 'first' ? '工号' : '工号 / 姓名 / 用户名'} autoComplete="username" autoFocus />
             </Form.Item>
+            {mode === 'first' && (
+              <Form.Item name="name" preserve={false} rules={[{ required: true, whitespace: true, message: '请输入姓名' }]}>
+                <Input prefix={<UserOutlined />} placeholder="姓名（须与教工名单一致）" autoComplete="name" />
+              </Form.Item>
+            )}
             {mode === 'password' && (
               <Form.Item name="password" preserve={false} rules={[{ required: true, message: '请输入密码' }]}>
                 <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" />
               </Form.Item>
             )}
             <Button type="primary" htmlType="submit" block loading={loading}>
-              登录
+              {mode === 'first' ? '首次登录并激活' : '登录'}
             </Button>
           </Form>
-          {mode === 'staff' && <div className="muted small" style={{ marginTop: 12 }}>名单内教工无需密码，输入工号或姓名即可登录；同名请使用工号。</div>}
+          <div className="muted small" style={{ marginTop: 12 }}>
+            {mode === 'first' ? '仅限管理员导入且尚未激活的教工账号。首次须同时填写工号和姓名，登录后会告知初始密码。' : '已激活的教工使用工号或姓名加密码登录；同名请使用工号。忘记密码请联系管理员。'}
+          </div>
           <div style={{ textAlign: 'center', marginTop: 16 }} className="muted small">
             {canRegister ? (
               <>

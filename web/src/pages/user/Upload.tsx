@@ -1,13 +1,13 @@
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Segmented, Select, Space, Table, Tag, Upload as AntUpload } from 'antd';
-import { DeleteOutlined, InboxOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Table, Tag, Upload as AntUpload } from 'antd';
+import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { api } from '../../api';
-import type { CourseInfo, CourseRow, Options } from '../../types';
+import { useAuth } from '../../auth';
+import type { CourseInfo, Options } from '../../types';
 
 interface UploadValues {
-  courseId?: number;
   trainingType: string;
   planGrade: number;
   adjustNote?: string;
@@ -20,19 +20,15 @@ interface UploadResult {
 }
 
 export default function Upload() {
-  const [params] = useSearchParams();
   const { message } = App.useApp();
+  const { checkQuota, refresh } = useAuth();
   const [form] = Form.useForm<UploadValues>();
   const [options, setOptions] = useState<Options | null>(null);
-  const [courses, setCourses] = useState<CourseRow[]>([]);
-  const [mode, setMode] = useState<'new' | 'existing'>(params.get('courseId') ? 'existing' : 'new');
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [results, setResults] = useState<Record<string, UploadResult>>({});
   const [submitting, setSubmitting] = useState(false);
   const [activeUid, setActiveUid] = useState<string | null>(null);
-  const courseId = Form.useWatch('courseId', form);
   const planGrade = Form.useWatch('planGrade', form);
-  const selected = courses.find((c) => c.id === courseId);
   const pendingCount = files.filter((file) => !results[file.uid]?.submissionId).length;
 
   useEffect(() => {
@@ -40,23 +36,22 @@ export default function Upload() {
       setOptions(r);
       form.setFieldValue('trainingType', r.trainingTypes[0]);
     }).catch((e) => message.error(e.message));
-    api.get<{ courses: CourseRow[] }>('/api/courses').then((r) => setCourses(r.courses)).catch((e) => message.error(e.message));
   }, [form, message]);
 
   const submit = async (values: UploadValues) => {
     const pending = files.filter((file) => !results[file.uid]?.submissionId);
     if (!pending.length) return message.warning('请先选择要上传的大纲文件');
+    if (checkQuota && pending.length > checkQuota.remaining) {
+      return message.warning(`今日还可提交 ${checkQuota.remaining} 份大纲，请减少文件数量后提交；次数不足请联系管理员。`);
+    }
     setSubmitting(true);
     let succeeded = 0;
     try {
       for (const file of pending) {
         setActiveUid(file.uid);
         const fd = new FormData();
-        if (mode === 'existing') fd.append('courseId', String(values.courseId));
-        else {
-          const fields = { ...values.outlines[file.uid], trainingType: values.trainingType, planGrade: values.planGrade, adjustNote: values.adjustNote ?? '' };
-          Object.entries(fields).forEach(([key, value]) => fd.append(key, String(value)));
-        }
+        const fields = { ...values.outlines[file.uid], trainingType: values.trainingType, planGrade: values.planGrade, adjustNote: values.adjustNote ?? '' };
+        Object.entries(fields).forEach(([key, value]) => fd.append(key, String(value)));
         fd.append('file', file.originFileObj!);
         try {
           const r = await api.post<{ submissionId: number }>('/api/submissions', fd);
@@ -68,17 +63,10 @@ export default function Upload() {
       }
       if (succeeded === pending.length) message.success(`${succeeded} 份大纲上传成功，已加入检查队列`);
       else message.warning(`${succeeded} 份上传成功，${pending.length - succeeded} 份失败，请查看对应行的原因后重试`);
-      if (succeeded) {
-        try {
-          const r = await api.get<{ courses: CourseRow[] }>('/api/courses');
-          setCourses(r.courses);
-        } catch (e) {
-          message.error((e as Error).message);
-        }
-      }
     } finally {
       setSubmitting(false);
       setActiveUid(null);
+      await refresh().catch((e) => message.error(e.message));
     }
   };
 
@@ -91,68 +79,48 @@ export default function Upload() {
         </div>
         <Link to="/submissions"><Button>查看上传记录</Button></Link>
       </div>
+      <Card title="上传前自查" extra={<Button icon={<DownloadOutlined />} href="/api/checklist.docx" disabled={!options?.checklist}>下载检查清单</Button>} style={{ marginBottom: 16 }}>
+        <div className="prose">
+          请先核对课程信息、课程目标与毕业要求的对应关系，以及教学内容、学时和考核比例是否一致。<br />
+          同时自查课程支撑矩阵、实验安排、评分标准及审核材料；完整要求请下载清单，逐项自查后再上传。
+        </div>
+        {options && !options.checklist && <div className="muted small">管理员尚未设置生效的检查清单，请联系管理员。</div>}
+      </Card>
       {options && !options.aiReady && <Alert type="warning" showIcon style={{ marginBottom: 16 }} title="管理员尚未完成 AI 配置，暂时无法提交检查。" />}
+      {checkQuota?.remaining === 0 && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          title={checkQuota.used >= checkQuota.limit ? '今日检查次数已用完，请联系管理员。' : '可用名额已被排队或检查中的任务占用，请等待任务完成或联系管理员。'}
+          description={`每天最多成功检查 ${checkQuota.limit} 次，发现问题也计次；检查失败不计次数，每天零点恢复。`} />
+      )}
       <Card>
-        <Segmented
-          style={{ marginBottom: 20 }}
-          value={mode}
-          disabled={submitting}
-          onChange={(value) => {
-            setMode(value as 'new' | 'existing');
-            setFiles([]);
-            setResults({});
-            form.resetFields();
-            form.setFieldValue('trainingType', options?.trainingTypes[0]);
-          }}
-          options={[
-            { value: 'new', label: '批量上传大纲' },
-            { value: 'existing', label: '已有课程上传新版本', disabled: !courses.length },
-          ]}
-        />
         <Form
           form={form}
           layout="vertical"
           disabled={submitting}
-          initialValues={{ planGrade: 2025, courseId: params.get('courseId') ? Number(params.get('courseId')) : undefined }}
+          initialValues={{ planGrade: 2025 }}
           onFinish={submit}
         >
-          {mode === 'existing' ? (
-            <>
-              <Form.Item label="选择课程" name="courseId" rules={[{ required: true, message: '请选择课程' }]}>
-                <Select
-                  placeholder="请选择课程"
-                  showSearch={{ optionFilterProp: 'label' }}
-                  options={courses.map((c) => ({ value: c.id, label: `${c.name}（${c.student_grade}级 · ${c.major} · ${c.training_type}）` }))}
-                />
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="培养类型（应用于待上传大纲）" name="trainingType" rules={[{ required: true, message: '请选择培养类型' }]}>
+                <Select options={(options?.trainingTypes ?? []).map((t) => ({ value: t, label: t }))} placeholder="请选择培养类型" />
               </Form.Item>
-              {selected && <p className="muted small">沿用该课程的年级、专业和对照方案。课程信息可在“我的课程”中修改。</p>}
-            </>
-          ) : (
-            <>
-              <Row gutter={16}>
-                <Col xs={24} md={12}>
-                  <Form.Item label="培养类型（应用于待上传大纲）" name="trainingType" rules={[{ required: true, message: '请选择培养类型' }]}>
-                    <Select options={(options?.trainingTypes ?? []).map((t) => ({ value: t, label: t }))} placeholder="请选择培养类型" />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item label="对照方案年级" name="planGrade" rules={[{ required: true, message: '请填写对照方案年级' }]} extra="本轮统一以2025级人才培养方案为对照起点，与学生年级分开选择">
-                    <InputNumber min={2000} max={new Date().getFullYear() + 5} suffix="级" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-              </Row>
-              {planGrade !== undefined && planGrade !== 2025 && (
-                <Form.Item label="对照方案调整说明" name="adjustNote" rules={[{ required: true, whitespace: true, message: '对照方案年级不是2025级时，请说明原因' }]}>
-                  <Input.TextArea rows={2} maxLength={500} />
-                </Form.Item>
-              )}
-            </>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="对照方案年级" name="planGrade" rules={[{ required: true, message: '请填写对照方案年级' }]} extra="本轮统一以2025级人才培养方案为对照起点，与学生年级分开选择">
+                <InputNumber min={2000} max={new Date().getFullYear() + 5} suffix="级" style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          {planGrade !== undefined && planGrade !== 2025 && (
+            <Form.Item label="对照方案调整说明" name="adjustNote" rules={[{ required: true, whitespace: true, message: '对照方案年级不是2025级时，请说明原因' }]}>
+              <Input.TextArea rows={2} maxLength={500} />
+            </Form.Item>
           )}
           <Form.Item label="教学大纲文件" required extra={`支持 .docx、.pdf，单个文件不超过 ${options?.maxUploadMB ?? 20}MB。每次上传独立检查，不与以往记录对比。`}>
             <AntUpload.Dragger
               accept=".docx,.pdf"
-              multiple={mode === 'new'}
-              maxCount={mode === 'existing' ? 1 : undefined}
+              multiple
               disabled={submitting}
               fileList={files}
               showUploadList={false}
@@ -170,7 +138,7 @@ export default function Upload() {
               onChange={({ fileList }) => setFiles(fileList)}
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-              <p className="ant-upload-text">{mode === 'new' ? '点击或拖拽多个大纲文件到此处' : '点击或拖拽一份新版大纲到此处'}</p>
+              <p className="ant-upload-text">点击或拖拽多个大纲文件到此处</p>
             </AntUpload.Dragger>
           </Form.Item>
           {files.length > 0 && (
@@ -182,32 +150,30 @@ export default function Upload() {
               style={{ marginBottom: 20 }}
               columns={[
                 { title: '大纲文件', dataIndex: 'name', width: 200, render: (name) => <span style={{ overflowWrap: 'anywhere' }}>{name}</span> },
-                ...(mode === 'new' ? [
-                  {
-                    title: '课程名称', width: 210,
-                    render: (_: unknown, file: UploadFile) => (
-                      <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
-                        <Input maxLength={100} disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的课程名称`} />
-                      </Form.Item>
-                    ),
-                  },
-                  {
-                    title: '年级', width: 120,
-                    render: (_: unknown, file: UploadFile) => (
-                      <Form.Item name={['outlines', file.uid, 'studentGrade']} rules={[{ required: true, message: '请选择年级' }]} style={{ marginBottom: 0 }} preserve={false}>
-                        <Select placeholder="选择年级" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的年级`} options={(options?.studentGrades ?? []).map((y) => ({ value: y, label: `${String(y).slice(-2)}级` }))} />
-                      </Form.Item>
-                    ),
-                  },
-                  {
-                    title: '专业', width: 210,
-                    render: (_: unknown, file: UploadFile) => (
-                      <Form.Item name={['outlines', file.uid, 'major']} rules={[{ required: true, message: '请选择专业' }]} style={{ marginBottom: 0 }} preserve={false}>
-                        <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />
-                      </Form.Item>
-                    ),
-                  },
-                ] : []),
+                {
+                  title: '课程名称', width: 210,
+                  render: (_: unknown, file: UploadFile) => (
+                    <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
+                      <Input maxLength={100} disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的课程名称`} />
+                    </Form.Item>
+                  ),
+                },
+                {
+                  title: '年级', width: 120,
+                  render: (_: unknown, file: UploadFile) => (
+                    <Form.Item name={['outlines', file.uid, 'studentGrade']} rules={[{ required: true, message: '请选择年级' }]} style={{ marginBottom: 0 }} preserve={false}>
+                      <Select placeholder="选择年级" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的年级`} options={(options?.studentGrades ?? []).map((y) => ({ value: y, label: `${String(y).slice(-2)}级` }))} />
+                    </Form.Item>
+                  ),
+                },
+                {
+                  title: '专业', width: 210,
+                  render: (_: unknown, file: UploadFile) => (
+                    <Form.Item name={['outlines', file.uid, 'major']} rules={[{ required: true, message: '请选择专业' }]} style={{ marginBottom: 0 }} preserve={false}>
+                      <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />
+                    </Form.Item>
+                  ),
+                },
                 {
                   title: '上传状态', width: 190,
                   render: (_, file) => {
@@ -225,9 +191,8 @@ export default function Upload() {
               ]}
             />
           )}
-          {mode === 'new' && files.length > 0 && <p className="muted small">系统按每行的专业及统一检查设置匹配培养方案；未预置方案时仍可检查，相关比对内容将列为“需核实事项”。课程名称默认取文件名，可逐行修改。</p>}
-          {mode === 'existing' && selected && <p className="muted small">对照方案：{selected.plan_grade}级{selected.major}（{selected.training_type}）</p>}
-          <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !pendingCount}>
+          {files.length > 0 && <p className="muted small">系统按每行的专业及统一检查设置匹配培养方案；未预置方案时仍可检查，相关比对内容将列为“需核实事项”。课程名称默认取文件名，可逐行修改。</p>}
+          <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
             {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>
         </Form>

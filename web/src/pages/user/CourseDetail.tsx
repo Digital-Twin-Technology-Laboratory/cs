@@ -1,5 +1,5 @@
 import { App, Breadcrumb, Button, Card, Descriptions, Form, Modal, Space, Table } from 'antd';
-import { EditOutlined, UploadOutlined } from '@ant-design/icons';
+import { EditOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, download } from '../../api';
@@ -75,7 +75,7 @@ export default function CourseDetail() {
     const v = await form.validateFields();
     try {
       await api.put(`/api/courses/${c.id}`, v);
-      message.success('课程信息已保存，下次上传检查时生效');
+      message.success('课程信息已保存，不影响已有检查结果');
       setEditing(false);
       load();
     } catch (e) {
@@ -97,9 +97,6 @@ export default function CourseDetail() {
           <Space>
             <Button icon={<EditOutlined />} onClick={openEdit}>
               修改课程信息
-            </Button>
-            <Button type="primary" icon={<UploadOutlined />} onClick={() => nav(`/upload?courseId=${c.id}`)}>
-              上传新版本
             </Button>
           </Space>
         )}
@@ -150,7 +147,7 @@ export default function CourseDetail() {
       </Space>
       <Modal title="修改课程信息" open={editing} onOk={save} onCancel={() => setEditing(false)} okText="保存" destroyOnHidden width={640}>
         <div className="muted small" style={{ marginBottom: 12 }}>
-          修改只影响之后的检查，已完成的检查记录保留当时的课程信息。
+          修改用于课程信息展示，已上传文件和检查记录保留上传时的课程信息。
         </div>
         <Form form={form} layout="vertical">
           <CourseFields options={options} />

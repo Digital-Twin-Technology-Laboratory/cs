@@ -6,7 +6,7 @@ import { SESSION_SECRET } from './services/crypto.js';
 declare module 'express-session' {
   interface SessionData {
     userId?: number;
-    passwordless?: boolean;
+    passwordless?: boolean; // 仅用于识别并拒绝旧版免密会话
   }
 }
 
@@ -81,7 +81,7 @@ export const sessionMiddleware = session({
 export function loadUser(req: Request, _res: Response, next: NextFunction) {
   if (req.session.userId) {
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId) as UserRow | undefined;
-    if (u && u.status === 'active' && (!req.session.passwordless || (u.roster_login === 1 && u.role === 'user'))) req.user = toPublic(u);
+    if (u && u.status === 'active' && !req.session.passwordless) req.user = toPublic(u);
     else delete req.session.userId;
   }
   next();

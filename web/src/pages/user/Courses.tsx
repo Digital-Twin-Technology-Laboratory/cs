@@ -63,9 +63,6 @@ export default function Courses() {
                       查看结果
                     </Button>
                   )}
-                  <Button size="small" type="link" onClick={() => nav(`/upload?courseId=${r.id}`)}>
-                    上传新版本
-                  </Button>
                 </Space>
               ),
             },

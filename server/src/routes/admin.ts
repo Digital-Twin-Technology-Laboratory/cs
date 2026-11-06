@@ -143,7 +143,7 @@ adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, r
       return entries.reduce((count, entry) => count + insert.run(entry.username, entry.name).changes, 0);
     })();
     const skipped = entries.length - imported;
-    audit(req.user, '导入教工名单', file.originalname, `导入 ${imported} 个免密码账号，跳过 ${skipped} 个已有工号`, req.ip);
+    audit(req.user, '导入教工名单', file.originalname, `导入 ${imported} 个待激活教工账号，跳过 ${skipped} 个已有工号`, req.ip);
     res.json({ imported, skipped });
   } finally {
     cleanupTmp(file);
@@ -166,7 +166,7 @@ adminRouter.put('/users/:id', (req, res) => {
     .parse(req.body);
   const next = { ...u, ...body };
   if (next.role === 'admin' && !u.password_hash) {
-    return res.status(400).json({ error: '该教工账号使用免密码登录，请先重置密码再设为管理员；管理员必须使用密码登录' });
+    return res.status(400).json({ error: '该教工账号尚未激活，请先重置密码再设为管理员；管理员必须使用密码登录' });
   }
   if (u.id === req.user!.id && (next.role !== 'admin' || next.status !== 'active')) {
     return res.status(400).json({ error: '不能取消自己的管理员权限或停用自己的账号' });

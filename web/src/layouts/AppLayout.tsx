@@ -1,19 +1,27 @@
-import { Dropdown, Layout, Menu, Button } from 'antd';
+import { App, Dropdown, Layout, Menu, Button, Tag, Tooltip } from 'antd';
 import { DownOutlined, LogoutOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth';
+import { useEffect } from 'react';
 
 export default function AppLayout() {
-  const { user, site, logout } = useAuth();
+  const { user, site, checkQuota, refresh, logout } = useAuth();
+  const { message } = App.useApp();
   const loc = useLocation();
   const nav = useNavigate();
   const selected = '/' + (loc.pathname.split('/')[1] || 'courses');
+
+  useEffect(() => {
+    const load = () => refresh().catch((e) => message.error(e.message));
+    load();
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [loc.pathname, refresh, message]);
 
   const items = [
     { key: '/upload', label: <Link to="/upload">上传检查</Link> },
     { key: '/submissions', label: <Link to="/submissions">上传记录</Link> },
     { key: '/courses', label: <Link to="/courses">我的课程</Link> },
-    { key: '/checklist', label: <Link to="/checklist">检查清单</Link> },
     ...(user?.role === 'admin' ? [{ key: '/admin', label: <Link to="/admin">管理后台</Link> }] : []),
   ];
 
@@ -25,6 +33,13 @@ export default function AppLayout() {
           <span className="brand-text">{site?.siteName}</span>
         </Link>
         <Menu mode="horizontal" selectedKeys={[selected]} items={items} />
+        {checkQuota && (
+          <Tooltip title={`已成功完成 ${checkQuota.used} 次，排队或检查中 ${checkQuota.pending} 份。每天最多成功检查 ${checkQuota.limit} 次，检查失败不计次，每天零点重置。`}>
+            <Tag color={checkQuota.remaining ? 'blue' : 'orange'} style={{ marginInlineEnd: 0, whiteSpace: 'nowrap' }} aria-live="polite">
+              今日剩余 {checkQuota.remaining}/{checkQuota.limit} 次
+            </Tag>
+          </Tooltip>
+        )}
         <Dropdown
           menu={{
             items: [

@@ -4,6 +4,7 @@ import { callAi } from './ai/provider.js';
 import { buildUserPrompt } from './ai/prompt.js';
 import { computeVerdict, extractJson, normalizeResult, ResultFormatError } from './ai/schema.js';
 import { loadChecklist } from './checklist.js';
+import { CHECK_QUOTA_ERROR, getCheckQuota } from './checkQuota.js';
 
 export interface CourseSnapshot {
   name: string;
@@ -47,9 +48,16 @@ function pump() {
   const limit = Math.max(1, getSettings('ai').concurrency);
   while (running < limit) {
     const next = db
-      .prepare("SELECT id FROM submissions WHERE status = 'queued' ORDER BY id LIMIT 1")
-      .get() as { id: number } | undefined;
+      .prepare("SELECT id, user_id FROM submissions WHERE status = 'queued' ORDER BY id LIMIT 1")
+      .get() as { id: number; user_id: number } | undefined;
     if (!next) return;
+    const quota = getCheckQuota(next.user_id);
+    if (quota.used >= quota.limit) {
+      db.prepare("UPDATE submissions SET status = 'failed', error = ?, finished_at = datetime('now','localtime') WHERE id = ?")
+        .run(CHECK_QUOTA_ERROR, next.id);
+      continue;
+    }
+    if (quota.used + quota.running >= quota.limit) return;
     const claimed = db
       .prepare("UPDATE submissions SET status = 'running', started_at = datetime('now','localtime'), error = NULL WHERE id = ? AND status = 'queued'")
       .run(next.id);

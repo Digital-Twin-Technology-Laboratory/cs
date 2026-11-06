@@ -7,7 +7,6 @@ export default function Profile() {
   const { user, setUser } = useAuth();
   const { message } = App.useApp();
   const [pwForm] = Form.useForm();
-  const passwordless = user?.roster_login === 1 && user.role === 'user';
 
   const saveInfo = async (v: { name: string; department: string }) => {
     try {
@@ -38,7 +37,7 @@ export default function Profile() {
         <Card title="账号信息">
           <Descriptions size="small" column={1} style={{ marginBottom: 16 }}>
             <Descriptions.Item label="用户名 / 工号">{user?.username}</Descriptions.Item>
-            <Descriptions.Item label="登录方式">{passwordless ? '工号或姓名（免密码）' : '账号密码'}</Descriptions.Item>
+            <Descriptions.Item label="登录方式">{user?.role === 'user' ? '工号 / 姓名 + 密码' : '用户名 + 密码'}</Descriptions.Item>
             <Descriptions.Item label="角色">{user?.role === 'admin' ? '管理员' : '普通用户'}</Descriptions.Item>
             <Descriptions.Item label="注册时间">{user?.created_at}</Descriptions.Item>
           </Descriptions>
@@ -54,7 +53,7 @@ export default function Profile() {
             </Button>
           </Form>
         </Card>
-        {!passwordless && <Card title="修改密码">
+        <Card title="修改密码">
           <Form form={pwForm} layout="vertical" onFinish={savePw}>
             <Form.Item label="原密码" name="oldPassword" rules={[{ required: true, message: '请输入原密码' }]}>
               <Input.Password autoComplete="current-password" />
@@ -79,7 +78,7 @@ export default function Profile() {
               修改密码
             </Button>
           </Form>
-        </Card>}
+        </Card>
       </Space>
     </div>
   );

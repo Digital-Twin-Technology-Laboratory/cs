@@ -20,6 +20,13 @@ export interface SiteInfo {
   hasUsers: boolean;
 }
 
+export interface CheckQuota {
+  limit: number;
+  used: number;
+  pending: number;
+  remaining: number;
+}
+
 export interface ChecklistItem {
   code: string;
   section: Section;
@@ -129,4 +136,5 @@ export interface Options {
   trainingTypes: string[];
   maxUploadMB: number;
   aiReady: boolean;
+  checklist: { id: number; name: string } | null;
 }

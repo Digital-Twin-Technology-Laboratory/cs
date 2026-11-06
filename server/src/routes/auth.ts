@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { audit, db } from '../db.js';
 import { requireAuth, toPublic, type UserRow } from '../auth.js';
 import { getSettings } from '../settings.js';
+import { getCheckQuota } from '../services/checkQuota.js';
 
 export const authRouter = Router();
 
@@ -14,6 +15,7 @@ const usernameSchema = z
   .max(32, '用户名最多32个字符')
   .regex(/^[A-Za-z0-9_.@-]+$/, '用户名只能包含字母、数字及 _ . @ -');
 export const passwordSchema = z.string().min(8, '密码至少8位').max(64, '密码最多64位');
+const INITIAL_PASSWORD = '12345678';
 
 const userCount = () => (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n;
 
@@ -24,6 +26,7 @@ authRouter.get('/me', (req, res) => {
   const site = getSettings('site');
   res.json({
     user: req.user ?? null,
+    checkQuota: req.user ? getCheckQuota(req.user.id) : null,
     site: { siteName: site.siteName, registrationMode: site.registrationMode, hasUsers: userCount() > 0 },
   });
 });
@@ -63,8 +66,13 @@ authRouter.post('/register', (req, res) => {
 });
 
 authRouter.post('/login', (req, res) => {
-  const { username, password } = z
-    .object({ username: z.string().trim().min(1, '请输入工号或姓名').max(50), password: z.string().optional() })
+  const { username, password, name } = z
+    .object({
+      username: z.string().trim().min(1, '请输入工号或姓名').max(50),
+      password: z.string().min(1, '请输入密码').max(64).optional(),
+      name: z.string().trim().min(1, '请输入姓名').max(50).optional(),
+    })
+    .refine((body) => body.password !== undefined || !!body.name, '首次登录请同时填写工号和姓名；已激活账号请使用密码登录')
     .parse(req.body);
   const key = `${username.toLowerCase()}|${req.ip}`;
   const f = failures.get(key);
@@ -72,20 +80,21 @@ authRouter.post('/login', (req, res) => {
 
   let u: UserRow | undefined;
   if (password === undefined) {
-    u = db.prepare("SELECT * FROM users WHERE username = ? AND roster_login = 1 AND role = 'user'").get(username) as UserRow | undefined;
-    if (!u) {
-      const matches = db.prepare("SELECT * FROM users WHERE name = ? AND roster_login = 1 AND role = 'user'").all(username) as UserRow[];
-      if (matches.length > 1) return res.status(400).json({ error: '存在同名教工，请使用工号登录' });
-      u = matches[0];
-    }
+    u = db.prepare("SELECT * FROM users WHERE username = ? AND name = ? AND roster_login = 1 AND role = 'user'").get(username, name) as UserRow | undefined;
+    if (u?.password_hash) return res.status(400).json({ error: '账号已激活，请使用工号或姓名和密码登录' });
   } else {
     u = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
+    if (!u) {
+      const matches = db.prepare("SELECT * FROM users WHERE name = ? AND role = 'user'").all(username) as UserRow[];
+      if (matches.length > 1) return res.status(400).json({ error: '存在同名用户，请使用工号或用户名登录' });
+      u = matches[0];
+    }
     if (u && !bcrypt.compareSync(password, u.password_hash)) u = undefined;
   }
   if (!u) {
     const n = (f && f.until <= Date.now() && f.n >= 5 ? 0 : f?.n ?? 0) + 1;
     failures.set(key, { n, until: n >= 5 ? Date.now() + 5 * 60_000 : 0 });
-    return res.status(400).json({ error: password === undefined ? '未找到该教工，请核对工号或姓名，或联系管理员导入名单' : '用户名或密码错误' });
+    return res.status(400).json({ error: password === undefined ? '工号与姓名不匹配，请核对信息或联系管理员导入名单' : '工号、姓名或密码错误' });
   }
   failures.delete(key);
   if (u.status === 'pending') return res.status(403).json({ error: '账号正在等待管理员审核' });
@@ -93,11 +102,15 @@ authRouter.post('/login', (req, res) => {
 
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: '登录失败' });
+    if (password === undefined) {
+      const activated = db.prepare("UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ''")
+        .run(bcrypt.hashSync(INITIAL_PASSWORD, 10), u.id);
+      if (!activated.changes) return res.status(400).json({ error: '账号已激活，请使用工号或姓名和密码登录' });
+    }
     req.session.userId = u.id;
-    req.session.passwordless = password === undefined;
     db.prepare("UPDATE users SET last_login_at = datetime('now','localtime') WHERE id = ?").run(u.id);
     audit(u, '登录', undefined, undefined, req.ip);
-    res.json({ user: toPublic(u) });
+    res.json({ user: toPublic(u), initialPassword: password === undefined ? INITIAL_PASSWORD : undefined });
   });
 });
 

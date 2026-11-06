@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
 import { audit, db } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { getSettings } from '../settings.js';
@@ -11,6 +12,7 @@ import { aiReady } from '../services/ai/provider.js';
 import { reportDocx, reportText, type ReportInput } from '../services/report.js';
 import { SECTION_META } from '../seed/checklist.js';
 import type { CheckResult } from '../services/ai/schema.js';
+import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
@@ -38,11 +40,45 @@ userRouter.get('/checklist', (_req, res) => {
   res.json({ checklist: c, sections: SECTION_META });
 });
 
+userRouter.get('/checklist.docx', async (_req, res) => {
+  const checklist = loadChecklist();
+  if (!checklist) return res.status(404).json({ error: '管理员尚未设置生效的检查清单' });
+  const children = [new Paragraph({ text: checklist.name, heading: HeadingLevel.TITLE })];
+  if (checklist.intro) {
+    for (const line of checklist.intro.split('\n')) children.push(new Paragraph(line));
+  }
+  for (const section of ['main', 'matrix', 'suggest'] as const) {
+    children.push(new Paragraph({ text: SECTION_META[section].title, heading: HeadingLevel.HEADING_1 }));
+    const note = checklist.notes[section];
+    if (note?.before) {
+      for (const line of note.before.split('\n')) children.push(new Paragraph(line));
+    }
+    for (const item of checklist.items.filter((item) => item.section === section)) {
+      children.push(new Paragraph({ text: `${item.code} ${item.title}`, heading: HeadingLevel.HEADING_2 }));
+      for (const line of item.content.split('\n')) children.push(new Paragraph(line));
+    }
+    if (note?.after) {
+      for (const line of note.after.split('\n')) children.push(new Paragraph(line));
+    }
+  }
+  if (checklist.rules) {
+    children.push(new Paragraph({ text: '判定时应保留的区别', heading: HeadingLevel.HEADING_1 }));
+    for (const line of checklist.rules.split('\n')) children.push(new Paragraph(line));
+  }
+  const buffer = await Packer.toBuffer(new Document({
+    styles: { default: { document: { run: { font: 'Microsoft YaHei', size: 22 }, paragraph: { spacing: { after: 120 } } } } },
+    sections: [{ children }],
+  }));
+  res.attachment(`${checklist.name}.docx`);
+  res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(buffer);
+});
+
 userRouter.get('/options', (_req, res) => {
   const plans = db
     .prepare('SELECT major, training_type, grade, name FROM training_plans WHERE enabled = 1 ORDER BY major, training_type, grade')
     .all() as { major: string; training_type: string; grade: number; name: string }[];
   const site = getSettings('site');
+  const checklist = loadChecklist();
   res.json({
     majors,
     studentGrades,
@@ -50,6 +86,7 @@ userRouter.get('/options', (_req, res) => {
     trainingTypes: site.trainingTypes,
     maxUploadMB: site.maxUploadMB,
     aiReady: aiReady() === null,
+    checklist: checklist ? { id: checklist.id, name: checklist.name } : null,
   });
 });
 
@@ -114,41 +151,30 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
   const file = req.file;
   try {
     if (!file) return res.status(400).json({ error: '请选择要上传的大纲文件' });
+    if (!getCheckQuota(req.user!.id).remaining) return res.status(429).json({ error: CHECK_QUOTA_ERROR });
     const notReady = aiReady();
     if (notReady) return res.status(400).json({ error: `管理员尚未完成 AI 配置（${notReady}），暂时无法检查` });
     const checklistId = activeChecklistId();
     if (!checklistId) return res.status(400).json({ error: '管理员尚未设置生效的检查清单' });
 
-    // 已有课程上传新版本，或新建课程
-    let course: CourseRow;
-    if (req.body.courseId) {
-      const found = db.prepare('SELECT * FROM courses WHERE id = ? AND user_id = ?').get(Number(req.body.courseId), req.user!.id) as
-        | CourseRow
-        | undefined;
-      if (!found) return res.status(404).json({ error: '课程不存在' });
-      course = found;
-    } else {
-      const body = courseSchema.parse(req.body);
-      const err = checkAdjust(body);
-      if (err) return res.status(400).json({ error: err });
-      const r = db
-        .prepare('INSERT INTO courses (user_id, name, major, training_type, student_grade, plan_grade, adjust_note) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(req.user!.id, body.name, body.major, body.trainingType, body.studentGrade, body.planGrade, body.adjustNote);
-      course = db.prepare('SELECT * FROM courses WHERE id = ?').get(r.lastInsertRowid) as CourseRow;
-    }
+    const body = courseSchema.parse(req.body);
+    const err = checkAdjust(body);
+    if (err) return res.status(400).json({ error: err });
 
     let text: string;
     try {
       text = await extractFile(file.path, file.originalname);
     } catch (e) {
-      if (!req.body.courseId) {
-        const n = db.prepare('SELECT COUNT(*) AS n FROM submissions WHERE course_id = ?').get(course.id) as { n: number };
-        if (!n.n) db.prepare('DELETE FROM courses WHERE id = ?').run(course.id);
-      }
       if (e instanceof ExtractError) return res.status(400).json({ error: e.message });
       throw e;
     }
 
+    // 文件解析期间其他请求可能已占用名额；从复查到入队之间不再让出执行权。
+    if (!getCheckQuota(req.user!.id).remaining) return res.status(429).json({ error: CHECK_QUOTA_ERROR });
+    const created = db
+      .prepare('INSERT INTO courses (user_id, name, major, training_type, student_grade, plan_grade, adjust_note) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(req.user!.id, body.name, body.major, body.trainingType, body.studentGrade, body.planGrade, body.adjustNote);
+    const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(created.lastInsertRowid) as CourseRow;
     const rel = storeFile(file.path, `uploads/${req.user!.id}`, file.originalname);
     const plan = findPlan(course.major, course.training_type, course.plan_grade);
     const snapshot: CourseSnapshot = {
@@ -299,6 +325,7 @@ userRouter.post('/submissions/:id/recheck', (req, res) => {
   const s = getOwnSub(req, res);
   if (!s) return;
   if (s.status !== 'failed') return res.status(400).json({ error: '只有检查失败的记录可以重新检查' });
+  if (!getCheckQuota(s.user_id).remaining) return res.status(429).json({ error: CHECK_QUOTA_ERROR });
   const notReady = aiReady();
   if (notReady) return res.status(400).json({ error: `AI 配置不完整：${notReady}` });
   db.prepare("UPDATE submissions SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL WHERE id = ?").run(s.id);

@@ -131,7 +131,7 @@ export default function Users() {
           columns={[
             { title: '用户名 / 工号', dataIndex: 'username', render: (v, r) => <>{v} {r.id === me?.id && <Tag>我</Tag>}</> },
             { title: '姓名', dataIndex: 'name' },
-            { title: '登录方式', width: 100, render: (_, r) => r.roster_login === 1 && r.role === 'user' ? '免密码' : '账号密码' },
+            { title: '登录方式', width: 150, render: (_, r) => r.role === 'user' ? '工号 / 姓名 + 密码' : '用户名 + 密码' },
             { title: '部门', dataIndex: 'department' },
             { title: '角色', dataIndex: 'role', width: 90, render: (v) => (v === 'admin' ? <Tag color="blue">管理员</Tag> : '普通用户') },
             { title: '状态', dataIndex: 'status', width: 90, render: (v) => <UserStatusTag status={v} /> },
@@ -222,8 +222,8 @@ export default function Users() {
         <Alert
           type="info"
           showIcon
-          title="导入后可直接使用工号或姓名登录，无需密码"
-          description="同名教工须使用工号登录。已有工号会跳过，不修改原账号、密码或权限。"
+          title="首次使用工号和姓名激活，之后使用密码登录"
+          description="首次登录后会告知初始密码，教工可在个人设置中修改。同名教工须使用工号登录。已有工号会跳过，不修改原账号、密码或权限。"
           style={{ marginBottom: 16 }}
         />
         <p>支持 Excel（.xlsx，第一个工作表）或 UTF-8 编码的 CSV。第一行包含“姓名”和“工号”两列，列顺序不限；工号列请设为文本，保留前导零。</p>

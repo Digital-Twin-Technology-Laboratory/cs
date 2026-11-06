@@ -10,7 +10,6 @@ import Courses from './pages/user/Courses';
 import CourseDetail from './pages/user/CourseDetail';
 import SubmissionDetail from './pages/user/SubmissionDetail';
 import Submissions from './pages/user/Submissions';
-import ChecklistPage from './pages/user/ChecklistPage';
 import Profile from './pages/user/Profile';
 import Dashboard from './pages/admin/Dashboard';
 import Users from './pages/admin/Users';
@@ -40,7 +39,7 @@ export default function App() {
     );
   return (
     <Routes>
-      <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/login" element={<Login />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />
       <Route
         element={
@@ -55,7 +54,7 @@ export default function App() {
         <Route path="courses/:id" element={<CourseDetail />} />
         <Route path="submissions" element={<Submissions />} />
         <Route path="submissions/:id" element={<SubmissionDetail />} />
-        <Route path="checklist" element={<ChecklistPage />} />
+        <Route path="checklist" element={<Navigate to="/upload" replace />} />
         <Route path="profile" element={<Profile />} />
         <Route
           path="admin"
