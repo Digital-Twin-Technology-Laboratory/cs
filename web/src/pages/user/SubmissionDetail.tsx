@@ -1,4 +1,4 @@
-import { Alert, App, Breadcrumb, Button, Card, Popconfirm, Result, Space, Spin } from 'antd';
+import { Alert, App, Breadcrumb, Button, Card, Collapse, Popconfirm, Result, Space, Spin } from 'antd';
 import { CheckOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -89,9 +89,7 @@ export default function SubmissionDetail() {
         </div>
       </div>
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-        <Card className="no-print">
-          <SubmissionMeta sub={s} />
-        </Card>
+        <Collapse className="no-print" items={[{ key: 'meta', label: '查看课程与上传信息', children: <SubmissionMeta sub={s} /> }]} />
         {s.status === 'done' && (
           <Alert
             className="no-print"

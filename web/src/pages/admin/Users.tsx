@@ -1,4 +1,5 @@
-import { Alert, App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Upload } from 'antd';
+import { Alert, App, Button, Card, Descriptions, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Tag, Upload } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -6,12 +7,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, qs } from '../../api';
 import { useAuth } from '../../auth';
 import { UserStatusTag } from '../../components/StatusTag';
-import type { User } from '../../types';
+import type { CheckQuota, User } from '../../types';
 
-type Row = User & { course_count: number; submission_count: number };
+type Row = User & { course_count: number; submission_count: number; checkQuota: CheckQuota };
 
 export default function Users() {
-  const { user: me } = useAuth();
+  const { user: me, refresh } = useAuth();
   const nav = useNavigate();
   const { message } = App.useApp();
   const [params] = useSearchParams();
@@ -24,6 +25,9 @@ export default function Users() {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [importing, setImporting] = useState(false);
   const [resetting, setResetting] = useState<Row | null>(null);
+  const [granting, setGranting] = useState<Row | null>(null);
+  const [grantingBusy, setGrantingBusy] = useState(false);
+  const [quotaForm] = Form.useForm();
   const [createForm] = Form.useForm();
   const [pwForm] = Form.useForm();
 
@@ -83,12 +87,27 @@ export default function Users() {
     }
   };
 
+  const grantQuota = async (values: { amount: number }) => {
+    setGrantingBusy(true);
+    try {
+      await api.post(`/api/admin/users/${granting!.id}/check-quota`, values);
+      message.success(`已为 ${granting!.name} 增加 ${values.amount} 次今日检查次数`);
+      setGranting(null);
+      await load();
+      await refresh();
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setGrantingBusy(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>用户管理</h1>
-          <div className="sub">审核注册、启用/停用账号、设置管理员、重置密码，查看各账号的课程与文件</div>
+          <div className="sub">管理账号、导入教工名单和增加今日检查次数。展开用户可查看注册及登录信息。</div>
         </div>
         <Space wrap>
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入教工名单</Button>
@@ -126,15 +145,16 @@ export default function Users() {
           rowKey="id"
           loading={loading}
           dataSource={data.rows}
-          scroll={{ x: 1200 }}
+          expandable={{ expandedRowRender: (r) => <Descriptions size="small" column={{ xs: 1, sm: 3 }} items={[
+            { key: 'login', label: '登录方式', children: r.role === 'admin' ? '用户名 + 密码' : '工号 / 姓名 + 密码' },
+            { key: 'created', label: '注册时间', children: r.created_at },
+            { key: 'last', label: '最近登录', children: r.last_login_at || '尚未登录' },
+          ]} /> }}
           pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 个账号` }}
           columns={[
-            { title: '用户名 / 工号', dataIndex: 'username', render: (v, r) => <>{v} {r.id === me?.id && <Tag>我</Tag>}</> },
-            { title: '姓名', dataIndex: 'name' },
-            { title: '登录方式', width: 150, render: (_, r) => r.role === 'user' ? '工号 / 姓名 + 密码' : '用户名 + 密码' },
-            { title: '部门', dataIndex: 'department' },
-            { title: '角色', dataIndex: 'role', width: 90, render: (v) => (v === 'admin' ? <Tag color="blue">管理员</Tag> : '普通用户') },
-            { title: '状态', dataIndex: 'status', width: 90, render: (v) => <UserStatusTag status={v} /> },
+            { title: '用户', width: 210, render: (_, r) => <div><strong className="user-name" title={r.name}>{r.name}{r.id === me?.id && <Tag style={{ marginLeft: 8 }}>我</Tag>}</strong><div className="muted small">{r.username}</div></div> },
+            { title: '部门', dataIndex: 'department', width: 120, render: (v) => v || '—' },
+            { title: '账号状态', width: 140, render: (_, r) => <Space size={4} wrap>{r.role === 'admin' && <Tag color="blue">管理员</Tag>}<UserStatusTag status={r.status} /></Space> },
             {
               title: '课程 / 检查',
               width: 110,
@@ -144,16 +164,14 @@ export default function Users() {
                 </Button>
               ),
             },
-            { title: '注册时间', dataIndex: 'created_at', width: 165 },
-            { title: '最近登录', dataIndex: 'last_login_at', width: 165, render: (v) => v || '—' },
+            { title: '今日检查次数', width: 170, render: (_, r) => <div className="quota-cell"><b>剩余 {r.checkQuota.remaining} / {r.checkQuota.limit} 次</b><div className="muted small">已完成 {r.checkQuota.used} · 占用 {r.checkQuota.pending}</div><Button size="small" icon={<PlusOutlined />} onClick={() => { quotaForm.resetFields(); setGranting(r); }}>增加次数</Button></div> },
             {
               title: '操作',
-              width: 300,
-              fixed: 'right',
+              width: 200,
               render: (_, r) => {
                 const self = r.id === me?.id;
                 return (
-                  <Space size={0} wrap>
+                  <div className="user-actions">
                     {r.status === 'pending' && (
                       <Button type="link" size="small" onClick={() => update(r, { status: 'active' }, '已审核通过')}>
                         审核通过
@@ -201,13 +219,31 @@ export default function Users() {
                         </Button>
                       </Popconfirm>
                     )}
-                  </Space>
+                  </div>
                 );
               },
             },
           ]}
         />
       </Card>
+
+      <Modal
+        title={`增加今日检查次数：${granting?.name ?? ''}`}
+        open={!!granting}
+        onOk={() => quotaForm.submit()}
+        onCancel={() => { if (!grantingBusy) setGranting(null); }}
+        okText="确认增加"
+        confirmLoading={grantingBusy}
+        cancelButtonProps={{ disabled: grantingBusy }}
+        destroyOnHidden
+      >
+        <Alert type="info" showIcon title="追加次数仅当天有效" description="次日恢复基础 5 次。检查失败不计次，排队和检查中的任务暂占名额。" style={{ marginBottom: 20 }} />
+        <Form form={quotaForm} layout="vertical" initialValues={{ amount: 5 }} preserve={false} onFinish={grantQuota}>
+          <Form.Item label="增加次数" name="amount" rules={[{ required: true, type: 'integer', min: 1, max: 1000, message: '请输入 1–1000 的整数' }]}>
+            <InputNumber min={1} max={1000} precision={0} addonAfter="次" style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="导入教工名单"

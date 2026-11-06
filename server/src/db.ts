@@ -61,6 +61,19 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ai_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  settings_json TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_active ON ai_profiles(is_active) WHERE is_active = 1;
+CREATE TABLE IF NOT EXISTS check_quota_grants (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  quota_date TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  PRIMARY KEY (user_id, quota_date)
+);
 CREATE TABLE IF NOT EXISTS checklist_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -142,6 +155,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 `);
+
+db.prepare(`
+  INSERT INTO ai_profiles (name, settings_json, is_active)
+  SELECT '默认配置', value, 1 FROM settings
+  WHERE key = 'ai' AND NOT EXISTS (SELECT 1 FROM ai_profiles)
+`).run();
 
 db.prepare(`
   UPDATE settings

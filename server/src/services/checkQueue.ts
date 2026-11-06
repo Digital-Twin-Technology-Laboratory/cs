@@ -97,10 +97,11 @@ async function runCheck(id: number) {
     syllabus: { fileName: sub.file_name, text: sub.extracted_text },
   });
   const codes = checklist.items.map((i) => i.code);
+  const settings = getSettings('ai');
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await callAi(user);
+    const r = await callAi(user, { settings });
     try {
       if (r.truncated) throw new ResultFormatError('AI 输出被截断，请在 AI 配置中调大“最大输出 token”');
       const result = normalizeResult(extractJson(r.text), codes, attempt === 0);

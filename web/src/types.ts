@@ -21,6 +21,7 @@ export interface SiteInfo {
 }
 
 export interface CheckQuota {
+  bonus: number;
   limit: number;
   used: number;
   pending: number;

@@ -53,7 +53,7 @@ export default function Login() {
   return (
     <div className="auth-wrap">
       <div className="auth-card">
-        <AuthTitle sub="教学大纲按检查清单进行 AI 检查，生成修改清单" />
+        <AuthTitle sub="教学大纲按检查清单进行 AI 检查，生成可下载的检查结果" />
         <Card>
           <Segmented
             block

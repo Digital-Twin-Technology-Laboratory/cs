@@ -34,7 +34,7 @@ export default function AppLayout() {
         </Link>
         <Menu mode="horizontal" selectedKeys={[selected]} items={items} />
         {checkQuota && (
-          <Tooltip title={`已成功完成 ${checkQuota.used} 次，排队或检查中 ${checkQuota.pending} 份。每天最多成功检查 ${checkQuota.limit} 次，检查失败不计次，每天零点重置。`}>
+          <Tooltip title={`今日已完成 ${checkQuota.used} 次，排队或检查中 ${checkQuota.pending} 份。基础额度每天 5 次，管理员今日追加 ${checkQuota.bonus} 次；失败不计次，次日恢复基础额度。`}>
             <Tag color={checkQuota.remaining ? 'blue' : 'orange'} style={{ marginInlineEnd: 0, whiteSpace: 'nowrap' }} aria-live="polite">
               今日剩余 {checkQuota.remaining}/{checkQuota.limit} 次
             </Tag>

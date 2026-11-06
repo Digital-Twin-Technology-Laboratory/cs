@@ -1,4 +1,5 @@
-import { App, Breadcrumb, Button, Card, Descriptions, Form, Modal, Space, Table } from 'antd';
+import { App, Breadcrumb, Button, Card, Descriptions, Form, Modal, Space } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { EditOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -118,7 +119,6 @@ export default function CourseDetail() {
             rowKey="id"
             dataSource={data.submissions}
             pagination={false}
-            scroll={{ x: 760 }}
             columns={[
               { title: '次数', dataIndex: 'seq', width: 80, render: (v) => `第${v}次` },
               { title: '文件', dataIndex: 'file_name', render: (v, r) => <>{v} <span className="muted small">{fmtSize(r.file_size)}</span></> },
@@ -134,8 +134,8 @@ export default function CourseDetail() {
                       查看
                     </Button>
                     {r.status === 'done' && (
-                      <Button size="small" type="link" onClick={() => download(`/api/submissions/${r.id}/report.docx`)}>
-                        下载修改清单
+                      <Button size="small" type="primary" ghost onClick={() => download(`/api/submissions/${r.id}/report.docx`)}>
+                        下载检查结果
                       </Button>
                     )}
                   </Space>

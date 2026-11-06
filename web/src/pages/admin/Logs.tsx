@@ -1,4 +1,5 @@
-import { Card, Input, Space, Table } from 'antd';
+import { Card, Input, Space } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { useEffect, useState } from 'react';
 import { api, qs } from '../../api';
 
@@ -43,7 +44,6 @@ export default function Logs() {
           size="small"
           loading={loading}
           dataSource={data.rows}
-          scroll={{ x: 900 }}
           pagination={{ current: page, pageSize: 30, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 条` }}
           columns={[
             { title: '时间', dataIndex: 'created_at', width: 170 },

@@ -1,4 +1,5 @@
-import { App, Button, Card, Popconfirm, Space, Table, Tag, Upload } from 'antd';
+import { App, Button, Card, Popconfirm, Space, Tag, Upload } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -86,7 +87,6 @@ export default function Checklists() {
           rowKey="id"
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 900 }}
           columns={[
             { title: '版本', dataIndex: 'id', width: 70, render: (v) => `#${v}` },
             { title: '名称', dataIndex: 'name', render: (v, r) => <>{v} {r.is_active ? <Tag color="green">生效中</Tag> : null}</> },

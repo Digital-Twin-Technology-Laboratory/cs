@@ -300,7 +300,7 @@ function reportInput(s: SubFull): ReportInput | null {
   };
 }
 
-const reportName = (s: SubFull, ext: string) => `${JSON.parse(s.course_snapshot).name}教学大纲修改清单（第${s.seq}次）.${ext}`;
+const reportName = (s: SubFull, ext: string) => `${JSON.parse(s.course_snapshot).name}教学大纲检查结果（第${s.seq}次）.${ext}`;
 
 userRouter.get('/submissions/:id/report.docx', async (req, res) => {
   const s = getOwnSub(req, res);

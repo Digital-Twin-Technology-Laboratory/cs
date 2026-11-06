@@ -1,4 +1,5 @@
-import { Alert, App, Button, Card, Col, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tag, Upload } from 'antd';
+import { Alert, App, Button, Card, Col, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Tag, Upload } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { InboxOutlined, PlusOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -100,7 +101,6 @@ export default function Plans() {
           rowKey="id"
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 1000 }}
           columns={[
             { title: '专业', dataIndex: 'major' },
             { title: '培养类型', dataIndex: 'training_type', width: 100 },
@@ -218,7 +218,7 @@ export default function Plans() {
             title="下方为从文件提取的文本，AI 检查时会使用这段文本。可删除与大纲检查无关的章节（如培养目标说明、学分统计表等），保留毕业要求指标全文、课程设置表和课程与毕业要求支撑矩阵。"
           />
           <Form.Item label={`方案文本（${textLen.toLocaleString()} 字）`} name="extractedText" rules={[{ required: true, message: '方案文本不能为空' }]}>
-            <Input.TextArea className="text-preview" autoSize={{ minRows: 20, maxRows: 40 }} />
+            <Input.TextArea className="text-preview" autoSize={{ minRows: 20 }} />
           </Form.Item>
         </Form>
       </Drawer>

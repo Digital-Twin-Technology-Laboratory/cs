@@ -1,5 +1,6 @@
-import { App, Button, Card, Empty, Input, Select, Space, Table, Tooltip } from 'antd';
-import { ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { App, Button, Card, Empty, Input, Select, Space, Tooltip } from 'antd';
+import Table from '../../components/ResponsiveTable';
+import { FileWordOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, download, qs } from '../../api';
@@ -78,7 +79,6 @@ export default function Submissions() {
           rowKey="id"
           loading={loading}
           dataSource={data.rows}
-          scroll={{ x: 1250 }}
           pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showSizeChanger: false, showTotal: (total) => `共 ${total} 条上传记录` }}
           locale={{ emptyText: <Empty description="暂无上传记录" /> }}
           columns={[
@@ -91,10 +91,11 @@ export default function Submissions() {
             { title: '结果上传状态', width: 165, render: (_, row) => <><ConfirmationTag confirmedAt={row.confirmed_at} status={row.status} />{row.confirmed_at && <div className="muted small">{row.confirmed_at}</div>}</> },
             { title: '文件上传时间', dataIndex: 'created_at', width: 170 },
             {
-              title: '操作', width: 160, fixed: 'right',
+              title: '操作', width: 220,
               render: (_, row) => (
                 <Space size={0}>
                   <Link to={`/submissions/${row.id}`}><Button type="link" size="small">{row.status === 'done' && !row.confirmed_at ? '查看并确认' : '查看详情'}</Button></Link>
+                  {row.status === 'done' && <Button type="primary" ghost size="small" icon={<FileWordOutlined />} onClick={() => download(`/api/submissions/${row.id}/report.docx`)}>下载检查结果</Button>}
                   <Button type="link" size="small" onClick={() => download(`/api/submissions/${row.id}/file`)}>原文件</Button>
                 </Space>
               ),

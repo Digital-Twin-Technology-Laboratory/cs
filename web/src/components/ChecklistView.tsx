@@ -1,4 +1,5 @@
-import { Card, Collapse, Empty, Input, Segmented, Space, Table } from 'antd';
+import { Card, Collapse, Empty, Input, Segmented, Space } from 'antd';
+import Table from './ResponsiveTable';
 import { useMemo, useState } from 'react';
 import type { Checklist, Section, SectionMeta } from '../types';
 
@@ -69,7 +70,6 @@ export default function ChecklistView({ checklist, sections }: { checklist: Chec
               rowKey="code"
               pagination={false}
               dataSource={rows}
-              scroll={{ x: 600 }}
               columns={[
                 { title: '编号', dataIndex: 'code', width: 70, render: (v) => <span className="code-cell">{v}</span> },
                 { title: sections[s].colTitle, dataIndex: 'title', width: 180, render: (v) => <b><Highlight text={v} q={kw} /></b> },

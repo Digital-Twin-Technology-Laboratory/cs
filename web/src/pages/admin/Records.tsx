@@ -1,4 +1,5 @@
-import { App, Button, Card, DatePicker, Input, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip } from 'antd';
+import { App, Button, Card, DatePicker, Input, Popconfirm, Select, Space, Tabs, Tag, Tooltip } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -99,7 +100,6 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
         size="middle"
         loading={loading}
         dataSource={data.rows}
-        scroll={{ x: 1500 }}
         pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 条` }}
         columns={[
           { title: '课程', dataIndex: 'course_name', render: (v, r) => <Link to={`/submissions/${r.id}`}>{v}</Link> },
@@ -144,8 +144,8 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
                   原文件
                 </Button>
                 {r.status === 'done' && (
-                  <Button type="link" size="small" onClick={() => download(`/api/submissions/${r.id}/report.docx`)}>
-                    修改清单
+                  <Button type="primary" ghost size="small" onClick={() => download(`/api/submissions/${r.id}/report.docx`)}>
+                    下载检查结果
                   </Button>
                 )}
                 {r.status === 'failed' && (
@@ -211,7 +211,6 @@ function CoursesTab({ userId }: { userId?: string }) {
         rowKey="id"
         loading={loading}
         dataSource={data.rows}
-        scroll={{ x: 1000 }}
         pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 门课程` }}
         columns={[
           { title: '课程名称', dataIndex: 'name', render: (v, r) => <Link to={`/courses/${r.id}`}>{v}</Link> },

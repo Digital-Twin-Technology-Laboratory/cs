@@ -15,13 +15,26 @@ import mammoth from 'mammoth';
 test('account activation, daily check quota and checklist download', { timeout: 45000 }, async (t) => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const dataDir = mkdtempSync(path.join(root, '.tmp-user-flows-'));
+  const legacyDatabase = new DatabaseSync(path.join(dataDir, 'app.db'));
+  legacyDatabase.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  legacyDatabase.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('ai', JSON.stringify({ provider: 'openai', model: 'legacy-model' }));
+  legacyDatabase.close();
   let database;
   let hold = null;
   let release;
   let failAi = false;
   let aiCalls = 0;
+  const aiRequests = [];
   const mock = http.createServer(async (req, res) => {
-    for await (const _chunk of req) { /* Consume the request before replying. */ }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    if (req.method === 'GET') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ data: [{ id: 'mock' }, { id: 'mock-second' }] }));
+      return;
+    }
+    const request = JSON.parse(body);
+    aiRequests.push({ model: request.model, authorization: req.headers.authorization });
     aiCalls++;
     if (hold) await hold;
     res.setHeader('Content-Type', 'application/json');
@@ -31,7 +44,7 @@ test('account activation, daily check quota and checklist download', { timeout: 
     }
     const items = database.prepare('SELECT code FROM checklist_items WHERE version_id = (SELECT id FROM checklist_versions WHERE is_active = 1 ORDER BY id DESC LIMIT 1)').all();
     const result = { summary: 'Test result', itemResults: items.map(({ code }) => ({ code, result: '未发现问题', note: '' })), issues: [], toVerify: [] };
-    res.end(JSON.stringify({ model: 'mock', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(result) } }] }));
+    res.end(JSON.stringify({ model: request.model, choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(result) } }] }));
   });
   mock.listen(0, '127.0.0.1');
   await once(mock, 'listening');
@@ -69,6 +82,9 @@ test('account activation, daily check quota and checklist download', { timeout: 
   await waitFor(() => output.includes('系统已启动'));
   database = new DatabaseSync(path.join(dataDir, 'app.db'));
   database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+  const migrated = database.prepare('SELECT * FROM ai_profiles WHERE is_active = 1').get();
+  assert.equal(migrated.name, '默认配置');
+  assert.equal(JSON.parse(migrated.settings_json).model, 'legacy-model');
   const base = `http://127.0.0.1:${port}`;
   function client() {
     let cookie = '';
@@ -213,6 +229,100 @@ test('account activation, daily check quota and checklist download', { timeout: 
     await waitFor(() => database.prepare("SELECT COUNT(*) AS n FROM submissions WHERE user_id = ? AND status IN ('queued', 'running')").get(userId).n === 0);
     assert.equal(database.prepare("SELECT COUNT(*) AS n FROM submissions WHERE user_id = ? AND status = 'done'").get(userId).n, 5);
     assert.equal(aiCalls - before, 1);
+  });
+
+  await t.test('admins grant additive same-day quota; users cannot grant and yesterday does not carry over', async () => {
+    database.prepare("UPDATE submissions SET finished_at = datetime('now','localtime') WHERE id IN (SELECT id FROM submissions WHERE user_id = ? AND status = 'done' ORDER BY id LIMIT 5)").run(teacherId);
+    assert.equal((await teacher('/api/auth/me')).data.checkQuota.remaining, 0);
+    assert.equal((await teacher(`/api/admin/users/${teacherId}/check-quota`, { amount: 3 })).status, 403);
+    for (const amount of [0, -1, 1.5, 1001, '5']) {
+      assert.equal((await admin(`/api/admin/users/${teacherId}/check-quota`, { amount })).status, 400);
+    }
+    assert.equal((await admin('/api/admin/users/999999/check-quota', { amount: 1 })).status, 404);
+    let response = await admin(`/api/admin/users/${teacherId}/check-quota`, { amount: 2 });
+    assert.equal(response.status, 200);
+    assert.equal(response.data.checkQuota.limit, 7);
+    assert.equal(response.data.checkQuota.remaining, 2);
+    response = await admin(`/api/admin/users/${teacherId}/check-quota`, { amount: 1 });
+    assert.equal(response.data.checkQuota.bonus, 3);
+    const listed = await admin('/api/admin/users?q=teacher001');
+    assert.equal(listed.data.rows[0].checkQuota.remaining, 3);
+    hold = new Promise((resolve) => { release = resolve; });
+    const uploaded = await teacher('/api/submissions', uploadForm());
+    assert.equal(uploaded.status, 200);
+    assert.equal((await teacher('/api/auth/me')).data.checkQuota.remaining, 2);
+    release();
+    hold = null;
+    await waitFor(() => database.prepare('SELECT status FROM submissions WHERE id = ?').get(uploaded.data.submissionId).status === 'done');
+    assert.equal((await teacher('/api/auth/me')).data.checkQuota.used, 6);
+    database.prepare("UPDATE check_quota_grants SET quota_date = date('now','localtime','-1 day') WHERE user_id = ?").run(teacherId);
+    database.prepare("UPDATE submissions SET finished_at = datetime('now','localtime','-1 day') WHERE user_id = ? AND status = 'done'").run(teacherId);
+    const reset = (await teacher('/api/auth/me')).data.checkQuota;
+    assert.equal(reset.limit, 5);
+    assert.equal(reset.bonus, 0);
+    assert.equal(reset.remaining, 5);
+  });
+
+  await t.test('AI profiles keep independent encrypted keys and prompts; activation controls real checks', async () => {
+    const initial = (await admin('/api/admin/ai/profiles')).data;
+    assert.equal(initial.profiles.length, 1);
+    const original = initial.profiles[0];
+    assert.equal(original.isActive, true);
+    assert.equal(original.hasKey, true);
+    assert.equal(original.apiKeyEnc, undefined);
+    assert.equal((await teacher('/api/admin/ai/profiles')).status, 403);
+    const created = await admin('/api/admin/ai/profiles', { ...config, name: 'Second provider', apiKey: 'second-secret', model: 'mock-second', systemPrompt: 'Custom check prompt' });
+    assert.equal(created.status, 200);
+    const second = created.data;
+    assert.equal(second.isActive, false);
+    assert.equal(second.apiKeyEnc, undefined);
+    assert.equal((await admin('/api/admin/ai')).data.model, 'mock');
+    const stored = database.prepare('SELECT settings_json FROM ai_profiles WHERE id = ?').get(second.id).settings_json;
+    assert.ok(!stored.includes('second-secret'));
+    const updated = await admin(`/api/admin/ai/profiles/${second.id}`, { ...config, apiKey: '', name: 'Second renamed', model: 'mock-second', systemPrompt: 'Updated prompt' }, 'PUT');
+    assert.equal(updated.data.hasKey, true);
+    assert.equal(updated.data.systemPrompt, 'Updated prompt');
+    const models = await admin('/api/admin/ai/models', { provider: 'openai', baseUrl: config.baseUrl, profileId: second.id });
+    assert.deepEqual(models.data.models, ['mock', 'mock-second']);
+    assert.equal((await admin('/api/admin/ai/test', { ...config, apiKey: '', profileId: second.id, model: 'mock-second' })).status, 200);
+    assert.equal(aiRequests.at(-1).authorization, 'Bearer second-secret');
+    assert.equal((await admin('/api/admin/ai/test', { ...config, apiKey: '', model: 'mock-second' })).status, 400);
+    assert.equal((await admin('/api/admin/ai/profiles', { ...config, apiKey: '', name: 'Missing key' })).status, 400);
+    assert.equal((await admin(`/api/admin/ai/profiles/${second.id}/activate`, {})).status, 200);
+    assert.equal((await admin('/api/admin/ai')).data.model, 'mock-second');
+    assert.equal((await admin(`/api/admin/ai/profiles/${second.id}`, undefined, 'DELETE')).status, 400);
+    const uploaded = await teacher('/api/submissions', uploadForm());
+    assert.equal(uploaded.status, 200);
+    await waitFor(() => database.prepare('SELECT status FROM submissions WHERE id = ?').get(uploaded.data.submissionId).status === 'done');
+    assert.equal(aiRequests.at(-1).model, 'mock-second');
+    assert.equal(aiRequests.at(-1).authorization, 'Bearer second-secret');
+    assert.equal((await teacher(`/api/submissions/${uploaded.data.submissionId}`)).data.submission.ai_model, 'mock-second');
+    assert.equal((await admin(`/api/admin/ai/profiles/${original.id}/activate`, {})).status, 200);
+    assert.equal((await admin('/api/admin/ai/test', { ...config, apiKey: '', profileId: original.id })).status, 200);
+    assert.equal(aiRequests.at(-1).authorization, 'Bearer test-only');
+    assert.equal((await admin(`/api/admin/ai/profiles/${second.id}`, undefined, 'DELETE')).status, 200);
+    assert.equal((await admin('/api/admin/ai/profiles')).data.profiles.length, 1);
+  });
+
+  await t.test('check result downloads use the reference paragraph layout and A/B numbering', async () => {
+    const courseId = seedCourse(teacherId);
+    const id = seedSubmission(courseId, teacherId, 'done', today.now, 'failed');
+    const issue = { nature: '明确问题', itemCodes: ['C01'], title: '考核权重不符', location: '第六部分', problem: '分项合计为90%。', advice: '核对并修正为100%。\n保留成绩依据。', evidence: 'Do not export this quote' };
+    database.prepare('UPDATE submissions SET result_json = ? WHERE id = ?').run(JSON.stringify({ summary: 'Result summary', itemResults: [], issues: [issue, { ...issue, nature: '建议修改', title: '细化评价标准' }], toVerify: [{ itemCodes: ['M03'], location: '签字页', content: '请核实归档材料。' }] }), id);
+    const text = (await teacher(`/api/submissions/${id}/report.txt`)).data.text;
+    for (const content of ['教学大纲检查结果', '一 明确问题及重大问题', 'A01 考核权重不符', '二 建议修改项', 'B01 细化评价标准', '位置：第六部分', '问题：分项合计为90%', '整改意见：', '附 需核实事项']) assert.ok(text.includes(content), content);
+    assert.doesNotMatch(text, /修改清单|C01|M03|Do not export/);
+    const downloaded = await teacher(`/api/submissions/${id}/report.docx`);
+    assert.equal(downloaded.status, 200);
+    assert.ok(decodeURIComponent(downloaded.headers.get('content-disposition')).includes('检查结果'));
+    const extracted = await mammoth.extractRawText({ buffer: downloaded.data });
+    assert.match(extracted.value, /A01 考核权重不符/);
+    assert.match(extracted.value, /B01 细化评价标准/);
+    const converted = await mammoth.convertToHtml({ buffer: downloaded.data });
+    assert.doesNotMatch(converted.value, /<table/);
+    assert.match(converted.value, /<h1>一 明确问题及重大问题<\/h1>/);
+    assert.match(converted.value, /<h2>A01 考核权重不符<\/h2>/);
+    assert.equal((await client()(`/api/submissions/${id}/report.docx`)).status, 401);
   });
 
   await t.test('download includes all active checklist content and follows version changes', async () => {

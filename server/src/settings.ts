@@ -50,7 +50,13 @@ const DEFAULTS = {
 
 type Key = keyof typeof DEFAULTS;
 
+export const DEFAULT_AI_SETTINGS = DEFAULTS.ai;
+
 export function getSettings<K extends Key>(key: K): (typeof DEFAULTS)[K] {
+  if (key === 'ai') {
+    const active = db.prepare('SELECT settings_json FROM ai_profiles WHERE is_active = 1').get() as { settings_json: string } | undefined;
+    if (active) return { ...DEFAULTS.ai, ...JSON.parse(active.settings_json) };
+  }
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
   const stored = row ? JSON.parse(row.value) : {};
   return { ...DEFAULTS[key], ...stored };
@@ -58,6 +64,13 @@ export function getSettings<K extends Key>(key: K): (typeof DEFAULTS)[K] {
 
 export function saveSettings<K extends Key>(key: K, patch: Partial<(typeof DEFAULTS)[K]>) {
   const next = { ...getSettings(key), ...patch };
+  if (key === 'ai') {
+    const updated = db.prepare('UPDATE ai_profiles SET settings_json = ? WHERE is_active = 1').run(JSON.stringify(next));
+    if (!updated.changes) {
+      db.prepare('INSERT INTO ai_profiles (name, settings_json, is_active) VALUES (?, ?, 1)').run('默认配置', JSON.stringify(next));
+    }
+    return next;
+  }
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
     key,
     JSON.stringify(next),

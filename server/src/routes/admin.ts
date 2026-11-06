@@ -6,7 +6,7 @@ import { InvalidInputError, InvalidSpreadsheetError, readSheet, SheetNotFoundErr
 import { z } from 'zod';
 import { audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
-import { getSettings, saveSettings, type AiSettings } from '../settings.js';
+import { DEFAULT_AI_SETTINGS, getSettings, saveSettings, type AiSettings } from '../settings.js';
 import { decrypt, encrypt, mask } from '../services/crypto.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../services/ai/prompt.js';
 import { aiReady, listModels, testConnection } from '../services/ai/provider.js';
@@ -15,6 +15,7 @@ import { aiStructureChecklist, parseChecklistFile } from '../services/checklistI
 import { extractFile, ExtractError } from '../services/extract.js';
 import { cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { kickQueue } from '../services/checkQueue.js';
+import { getCheckQuota } from '../services/checkQuota.js';
 import { passwordSchema } from './auth.js';
 import { COURSE_LIST_SQL } from './user.js';
 
@@ -72,7 +73,7 @@ adminRouter.get('/users', (req, res) => {
        FROM users u WHERE ${w} ORDER BY (u.status = 'pending') DESC, u.id DESC LIMIT ? OFFSET ?`,
     )
     .all(...args, pageSize, offset);
-  res.json({ total, rows });
+  res.json({ total, rows: (rows as { id: number }[]).map((user) => ({ ...user, checkQuota: getCheckQuota(user.id) })) });
 });
 
 adminRouter.post('/users', (req, res) => {
@@ -192,6 +193,19 @@ adminRouter.post('/users/:id/reset-password', (req, res) => {
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 10), id);
   audit(req.user, '重置密码', u.username, undefined, req.ip);
   res.json({ ok: true });
+});
+
+adminRouter.post('/users/:id/check-quota', (req, res) => {
+  const id = idParam(req.params.id);
+  const { amount } = z.object({ amount: z.number().int().min(1).max(1000) }).parse(req.body);
+  const user = db.prepare('SELECT username FROM users WHERE id = ?').get(id) as { username: string } | undefined;
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+  db.prepare(`
+    INSERT INTO check_quota_grants (user_id, quota_date, amount) VALUES (?, date('now','localtime'), ?)
+    ON CONFLICT(user_id, quota_date) DO UPDATE SET amount = amount + excluded.amount
+  `).run(id, amount);
+  audit(req.user, '增加今日检查次数', user.username, `增加 ${amount} 次，仅当天有效`, req.ip);
+  res.json({ checkQuota: getCheckQuota(id) });
 });
 
 adminRouter.delete('/users/:id', (req, res) => {
@@ -517,8 +531,15 @@ adminRouter.delete('/plans/:id', (req, res) => {
 function publicAi(s: AiSettings) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { apiKeyEnc, ...rest } = s;
-  return { ...rest, apiKeyMasked: mask(decrypt(apiKeyEnc)), hasKey: !!decrypt(apiKeyEnc), defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT };
+  const key = decrypt(apiKeyEnc);
+  return { ...rest, apiKeyMasked: mask(key), hasKey: !!key, defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT };
 }
+
+interface AiProfileRow { id: number; name: string; settings_json: string; is_active: number }
+
+const profileSettings = (profile: AiProfileRow): AiSettings => ({ ...DEFAULT_AI_SETTINGS, ...JSON.parse(profile.settings_json) });
+
+const publicProfile = (profile: AiProfileRow) => ({ id: profile.id, name: profile.name, isActive: !!profile.is_active, ...publicAi(profileSettings(profile)) });
 
 const aiBody = z.object({
   provider: z.enum(['openai', 'anthropic']),
@@ -537,10 +558,68 @@ const aiBody = z.object({
 
 adminRouter.get('/ai', (_req, res) => res.json(publicAi(getSettings('ai'))));
 
+adminRouter.get('/ai/profiles', (_req, res) => {
+  const rows = db.prepare('SELECT * FROM ai_profiles ORDER BY id').all() as AiProfileRow[];
+  res.json({ profiles: rows.map(publicProfile), defaults: publicAi(DEFAULT_AI_SETTINGS) });
+});
+
+adminRouter.post('/ai/profiles', (req, res) => {
+  const { name, apiKey, ...body } = aiBody.extend({ name: z.string().trim().min(1, '请填写配置名称').max(80) }).parse(req.body);
+  const settings = { ...body, apiKeyEnc: apiKey ? encrypt(apiKey) : '', systemPrompt: body.systemPrompt.trim() === DEFAULT_SYSTEM_PROMPT.trim() ? '' : body.systemPrompt };
+  const problem = aiReady(settings);
+  if (problem) return res.status(400).json({ error: problem });
+  const isActive = !db.prepare('SELECT 1 FROM ai_profiles WHERE is_active = 1').get();
+  const { lastInsertRowid: id } = db.prepare('INSERT INTO ai_profiles (name, settings_json, is_active) VALUES (?, ?, ?)').run(name, JSON.stringify(settings), isActive);
+  audit(req.user, '新增 AI 配置', name, `${settings.provider} / ${settings.model}`, req.ip);
+  if (isActive) kickQueue();
+  res.json(publicProfile(db.prepare('SELECT * FROM ai_profiles WHERE id = ?').get(id) as AiProfileRow));
+});
+
+adminRouter.put('/ai/profiles/:id', (req, res) => {
+  const id = idParam(req.params.id);
+  const profile = db.prepare('SELECT * FROM ai_profiles WHERE id = ?').get(id) as AiProfileRow | undefined;
+  if (!profile) return res.status(404).json({ error: '配置不存在' });
+  const { name, apiKey, ...body } = aiBody.extend({ name: z.string().trim().min(1, '请填写配置名称').max(80) }).parse(req.body);
+  const settings = { ...body, apiKeyEnc: apiKey ? encrypt(apiKey) : profileSettings(profile).apiKeyEnc, systemPrompt: body.systemPrompt.trim() === DEFAULT_SYSTEM_PROMPT.trim() ? '' : body.systemPrompt };
+  const problem = aiReady(settings);
+  if (problem) return res.status(400).json({ error: problem });
+  db.prepare('UPDATE ai_profiles SET name = ?, settings_json = ? WHERE id = ?').run(name, JSON.stringify(settings), id);
+  audit(req.user, '修改 AI 配置', name, apiKey ? '更新了 API Key' : undefined, req.ip);
+  if (profile.is_active) kickQueue();
+  res.json(publicProfile({ ...profile, name, settings_json: JSON.stringify(settings) }));
+});
+
+adminRouter.post('/ai/profiles/:id/activate', (req, res) => {
+  const id = idParam(req.params.id);
+  const profile = db.prepare('SELECT * FROM ai_profiles WHERE id = ?').get(id) as AiProfileRow | undefined;
+  if (!profile) return res.status(404).json({ error: '配置不存在' });
+  const problem = aiReady(profileSettings(profile));
+  if (problem) return res.status(400).json({ error: problem });
+  db.transaction(() => {
+    db.prepare('UPDATE ai_profiles SET is_active = 0 WHERE is_active = 1').run();
+    db.prepare('UPDATE ai_profiles SET is_active = 1 WHERE id = ?').run(id);
+  })();
+  audit(req.user, '切换 AI 配置', profile.name, profileSettings(profile).model, req.ip);
+  kickQueue();
+  res.json({ ok: true });
+});
+
+adminRouter.delete('/ai/profiles/:id', (req, res) => {
+  const id = idParam(req.params.id);
+  const profile = db.prepare('SELECT * FROM ai_profiles WHERE id = ?').get(id) as AiProfileRow | undefined;
+  if (!profile) return res.status(404).json({ error: '配置不存在' });
+  if (profile.is_active) return res.status(400).json({ error: '请先切换到其他配置，再删除当前使用的配置' });
+  db.prepare('DELETE FROM ai_profiles WHERE id = ?').run(id);
+  audit(req.user, '删除 AI 配置', profile.name, undefined, req.ip);
+  res.json({ ok: true });
+});
+
 adminRouter.post('/ai/models', async (req, res) => {
-  const { apiKey, ...body } = aiBody.pick({ provider: true, baseUrl: true, apiKey: true }).parse(req.body);
+  const { apiKey, profileId, ...body } = aiBody.pick({ provider: true, baseUrl: true, apiKey: true }).extend({ profileId: z.number().int().positive().optional() }).parse(req.body);
   if (body.provider === 'openai' && !body.baseUrl) return res.status(400).json({ error: '请先填写接口地址（Base URL）' });
-  const key = apiKey || decrypt(getSettings('ai').apiKeyEnc);
+  const profile = profileId ? db.prepare('SELECT * FROM ai_profiles WHERE id = ?').get(profileId) as AiProfileRow | undefined : undefined;
+  if (profileId && !profile) return res.status(404).json({ error: '配置不存在' });
+  const key = apiKey || (profile ? decrypt(profileSettings(profile).apiKeyEnc) : '');
   if (!key) return res.status(400).json({ error: '请先填写 API Key' });
   try {
     res.json({ models: await listModels(body, key) });
@@ -560,12 +639,13 @@ adminRouter.put('/ai', (req, res) => {
 });
 
 adminRouter.post('/ai/test', async (req, res) => {
-  const { apiKey, ...body } = aiBody.parse(req.body);
-  const stored = getSettings('ai');
-  const key = apiKey || decrypt(stored.apiKeyEnc);
+  const { apiKey, profileId, ...body } = aiBody.extend({ profileId: z.number().int().positive().optional() }).parse(req.body);
+  const profile = profileId ? db.prepare('SELECT * FROM ai_profiles WHERE id = ?').get(profileId) as AiProfileRow | undefined : undefined;
+  if (profileId && !profile) return res.status(404).json({ error: '配置不存在' });
+  const key = apiKey || (profile ? decrypt(profileSettings(profile).apiKeyEnc) : '');
   if (!key) return res.status(400).json({ error: '请先填写 API Key' });
   try {
-    res.json(await testConnection({ ...stored, ...body }, key));
+    res.json(await testConnection({ ...body, apiKeyEnc: '' }, key));
   } catch (e) {
     res.status(400).json({ error: (e as Error).message || '连接失败' });
   }

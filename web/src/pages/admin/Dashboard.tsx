@@ -1,4 +1,5 @@
-import { Alert, Button, Card, Col, Row, Statistic, Table } from 'antd';
+import { Alert, Button, Card, Col, Row, Statistic } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../api';
@@ -75,7 +76,6 @@ export default function Dashboard() {
           size="small"
           pagination={false}
           dataSource={s?.recent ?? []}
-          scroll={{ x: 640 }}
           columns={[
             { title: '课程', dataIndex: 'course_name', render: (v, r) => <Link to={`/submissions/${r.id}`}>{v}</Link> },
             { title: '次数', dataIndex: 'seq', width: 80, render: (v) => `第${v}次` },

@@ -1,4 +1,5 @@
-import { Alert, App, Button, Card, Descriptions, Empty, Space, Table, Typography } from 'antd';
+import { Alert, App, Button, Card, Descriptions, Empty, Space, Typography } from 'antd';
+import Table from './ResponsiveTable';
 import { CopyOutlined, DownloadOutlined, FileWordOutlined, PrinterOutlined } from '@ant-design/icons';
 import { api, download } from '../api';
 import type { CheckResult, ChecklistItem, SectionMeta, SubmissionDetail } from '../types';
@@ -13,22 +14,10 @@ interface Props {
 function IssueCard({ n, label, issue }: { n: number; label: string; issue: CheckResult['issues'][number] }) {
   return (
     <div className="issue">
-      <div className="issue-title">
-        <span>
-          {label}
-          {n}
-        </span>
-        <NatureTag nature={issue.nature} />
-        <span>{issue.title}</span>
-      </div>
-      <dl>
-        <dt>所在位置</dt>
-        <dd>{issue.location}</dd>
-        <dt>当前问题</dt>
-        <dd>{issue.problem}</dd>
-        <dt>整改意见</dt>
-        <dd>{issue.advice}</dd>
-      </dl>
+      <h3 className="issue-title">{label}{String(n).padStart(2, '0')} {issue.title}</h3>
+      <p className="issue-location"><b>位置：</b>{issue.location}</p>
+      <p><b>问题：</b>{issue.problem}</p>
+      <p className="issue-advice"><b>整改意见：</b>{issue.advice}</p>
     </div>
   );
 }
@@ -73,7 +62,7 @@ export default function ResultView({ sub, items, sections }: Props) {
       document.execCommand('copy');
       ta.remove();
     }
-    message.success('修改清单已复制');
+    message.success('检查结果已复制');
   };
 
   const evidenceOf = (code: string) => r.issues.filter((i) => i.itemCodes.includes(code));
@@ -81,7 +70,16 @@ export default function ResultView({ sub, items, sections }: Props) {
 
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <Card>
+      <Card className="result-download no-print">
+        <div className="result-download-head">
+          <div>
+            <h2>检查结果</h2>
+            <p>在这里下载完整检查结果，Word 文件可直接保存、编辑或打印。</p>
+          </div>
+          <Button size="large" type="primary" icon={<FileWordOutlined />} onClick={() => download(`/api/submissions/${sub.id}/report.docx`)}>
+            下载检查结果（Word）
+          </Button>
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
           <Space size={12} wrap>
             <SubmissionTag status={sub.status} verdict={sub.verdict} />
@@ -90,9 +88,6 @@ export default function ResultView({ sub, items, sections }: Props) {
             </span>
           </Space>
           <Space wrap className="no-print">
-            <Button type="primary" icon={<FileWordOutlined />} onClick={() => download(`/api/submissions/${sub.id}/report.docx`)}>
-              下载修改清单（Word）
-            </Button>
             <Button icon={<CopyOutlined />} onClick={copy}>
               复制文本
             </Button>
@@ -116,16 +111,21 @@ export default function ResultView({ sub, items, sections }: Props) {
         )}
       </Card>
 
-      <Card title="修改清单">
-        <div className="section-title">一、明确问题及重大问题（共{major.length}项）</div>
-        {major.length ? major.map((i, n) => <IssueCard key={n} n={n + 1} label="问题" issue={i} />) : <div className="muted">无。</div>}
+      <Card className="report-paper">
+        <h2 className="report-title">《{sub.course.name}》教学大纲检查结果</h2>
+        <p className="report-scope">检查对象：{sub.course.studentGrade}级《{sub.course.name}》教学大纲。对照方案：{sub.plan_name || `${sub.course.planGrade}级${sub.course.major}（${sub.course.trainingType}）人才培养方案（未预置，相关内容需核实）`}。</p>
+        <p className="report-meta">专业：{sub.course.major}　培养类型：{sub.course.trainingType}　检查次数：第{sub.seq}次　检查时间：{sub.finished_at}</p>
+        {sub.course.adjustNote && <p className="report-meta">对照方案调整说明：{sub.course.adjustNote}</p>}
+        <p className="report-meta"><b>检查结论：</b>{sub.verdict === 'passed' ? '检查通过' : '未通过，需修改后重新提交'}</p>
+        <h3 className="report-section">一 明确问题及重大问题</h3>
+        {major.length ? major.map((i, n) => <IssueCard key={n} n={n + 1} label="A" issue={i} />) : <p>无。</p>}
 
-        <div className="section-title">二、建议修改（共{suggest.length}项）</div>
-        {suggest.length ? suggest.map((i, n) => <IssueCard key={n} n={n + 1} label="建议" issue={i} />) : <div className="muted">无。</div>}
+        <h3 className="report-section">二 建议修改项</h3>
+        {suggest.length ? suggest.map((i, n) => <IssueCard key={n} n={n + 1} label="B" issue={i} />) : <p>无。</p>}
 
         {r.toVerify.length > 0 && (
           <>
-            <div className="section-title">附：需核实事项</div>
+            <h3 className="report-section">附 需核实事项</h3>
             <div className="muted small" style={{ marginBottom: 8 }}>
               以下事项仅凭本次提交的大纲无法确认，不属于已确认问题，请结合相关材料核实。
             </div>
@@ -157,7 +157,6 @@ export default function ResultView({ sub, items, sections }: Props) {
                 rowKey="code"
                 pagination={false}
                 dataSource={rows}
-                scroll={{ x: 640 }}
                 expandable={{
                   rowExpandable: (row) => evidenceOf(row.code).length + verifyOf(row.code).length > 0,
                   expandedRowRender: (row) => (

@@ -1,4 +1,5 @@
-import { Button, Card, Empty, Input, Space, Table } from 'antd';
+import { Button, Card, Empty, Input, Space } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { PlusOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -39,7 +40,6 @@ export default function Courses() {
           rowKey="id"
           loading={rows === null}
           dataSource={data}
-          scroll={{ x: 900 }}
           pagination={{ pageSize: 20, hideOnSinglePage: true }}
           locale={{ emptyText: <Empty description="还没有课程，点击右上角“上传检查”开始" /> }}
           columns={[

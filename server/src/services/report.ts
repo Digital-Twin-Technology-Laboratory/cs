@@ -1,15 +1,4 @@
-import {
-  AlignmentType,
-  BorderStyle,
-  Document,
-  Packer,
-  Paragraph,
-  Table,
-  TableCell,
-  TableRow,
-  TextRun,
-  WidthType,
-} from 'docx';
+import { AlignmentType, Document, HeadingLevel, LineRuleType, Packer, Paragraph, TextRun } from 'docx';
 import type { CheckResult } from './ai/schema.js';
 import type { CourseSnapshot } from './checkQueue.js';
 
@@ -22,11 +11,13 @@ export interface ReportInput {
   result: CheckResult;
 }
 
-const verdictText = (v: ReportInput['verdict']) => (v === 'passed' ? '检查通过' : '未通过，需按清单修改后重新提交');
-
-function planLabel(r: ReportInput) {
-  return r.planName || `${r.course.planGrade}级${r.course.major}（${r.course.trainingType}）人才培养方案`;
-}
+const verdictText = (v: ReportInput['verdict']) => v === 'passed' ? '检查通过' : '未通过，需修改后重新提交';
+const planLabel = (r: ReportInput) => r.planName || `${r.course.planGrade}级${r.course.major}（${r.course.trainingType}）人才培养方案（未预置，相关内容需核实）`;
+const issueNumber = (prefix: string, n: number) => `${prefix}${String(n + 1).padStart(2, '0')}`;
+const reportTitle = (r: ReportInput) => `《${r.course.name}》教学大纲检查结果`;
+const reportScope = (r: ReportInput) => `检查对象：${r.course.studentGrade}级《${r.course.name}》教学大纲。对照方案：${planLabel(r)}。`;
+const reportMeta = (r: ReportInput) => `专业：${r.course.major}　培养类型：${r.course.trainingType}　检查次数：第${r.seq}次　检查时间：${r.checkedAt}`;
+const REPORT_NOTE = '注：本结果由 AI 依据教学大纲检查清单生成，供修改参考；问题编号仅用于识别和引用，不代表整改顺序。';
 
 function split(r: CheckResult) {
   return {
@@ -35,140 +26,84 @@ function split(r: CheckResult) {
   };
 }
 
-/** 纯文本修改清单（可复制）。不含内部条目编号、原文摘录、处理顺序。 */
 export function reportText(r: ReportInput): string {
   const { major, suggest } = split(r.result);
-  const L: string[] = [];
-  L.push(`《${r.course.name}》教学大纲修改清单`);
-  L.push('');
-  L.push(`课程名称：${r.course.name}`);
-  L.push(`专业：${r.course.major}　培养类型：${r.course.trainingType}　学生年级：${r.course.studentGrade}级`);
-  L.push(`对照方案：${planLabel(r)}`);
-  if (r.course.adjustNote) L.push(`对照方案调整说明：${r.course.adjustNote}`);
-  L.push(`检查次数：第${r.seq}次　检查时间：${r.checkedAt}`);
-  L.push(`检查结论：${verdictText(r.verdict)}`);
-  L.push('');
-  L.push(`一、明确问题及重大问题（共${major.length}项）`);
-  if (!major.length) L.push('无。');
-  major.forEach((i, n) => {
-    L.push(`问题${n + 1}【${i.nature}】${i.title}`);
-    L.push(`所在位置：${i.location}`);
-    L.push(`当前问题：${i.problem}`);
-    L.push(`整改意见：${i.advice}`);
-    L.push('');
-  });
-  if (!major.length) L.push('');
-  L.push(`二、建议修改（共${suggest.length}项）`);
-  if (!suggest.length) L.push('无。');
-  suggest.forEach((i, n) => {
-    L.push(`建议${n + 1} ${i.title}`);
-    L.push(`所在位置：${i.location}`);
-    L.push(`当前问题：${i.problem}`);
-    L.push(`整改意见：${i.advice}`);
-    L.push('');
-  });
-  if (r.result.toVerify.length) {
-    if (!suggest.length) L.push('');
-    L.push('附：需核实事项（不属于已确认问题，请结合相关材料核实）');
-    r.result.toVerify.forEach((v, n) => L.push(`${n + 1}. ${v.location ? `${v.location}：` : ''}${v.content}`));
-    L.push('');
+  const lines = [reportTitle(r), '', reportScope(r), reportMeta(r)];
+  if (r.course.adjustNote) lines.push(`对照方案调整说明：${r.course.adjustNote}`);
+  lines.push(`检查结论：${verdictText(r.verdict)}`, '');
+  for (const [title, prefix, issues] of [
+    ['一 明确问题及重大问题', 'A', major],
+    ['二 建议修改项', 'B', suggest],
+  ] as const) {
+    lines.push(title);
+    if (!issues.length) lines.push('无。', '');
+    issues.forEach((issue, n) => lines.push(
+      `${issueNumber(prefix, n)} ${issue.title}`,
+      `位置：${issue.location}`,
+      `问题：${issue.problem}`,
+      `整改意见：${issue.advice}`, '',
+    ));
   }
-  L.push('注：本清单由 AI 依据教学大纲检查清单生成，供修改参考；问题编号仅用于识别和引用，不代表整改顺序。');
-  return L.join('\n');
+  if (r.result.toVerify.length) {
+    lines.push('附 需核实事项', '以下事项不属于已确认问题，请结合相关材料核实。');
+    r.result.toVerify.forEach((v, n) => lines.push(`${n + 1}. ${v.location ? `${v.location}：` : ''}${v.content}`));
+    lines.push('');
+  }
+  lines.push(REPORT_NOTE);
+  return lines.join('\n');
 }
 
-// ---------- Word ----------
-const BODY = '宋体';
-const HEAD = '黑体';
+const BODY = { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体' };
+const HEAD = { ...BODY, eastAsia: '黑体' };
 
-const run = (text: string, o: { bold?: boolean; font?: string; size?: number; color?: string } = {}) =>
-  new TextRun({ text, bold: o.bold, size: o.size ?? 24, color: o.color, font: { name: o.font ?? BODY, eastAsia: o.font ?? BODY } });
+const run = (text: string, bold = false, size = 22) => new TextRun({ text, bold, size, color: '000000', font: BODY });
 
-const para = (children: TextRun[], o: { before?: number; after?: number; indent?: number; align?: (typeof AlignmentType)[keyof typeof AlignmentType] } = {}) =>
-  new Paragraph({
-    children,
-    alignment: o.align,
-    spacing: { before: o.before ?? 0, after: o.after ?? 60, line: 360 },
-    indent: o.indent ? { left: o.indent } : undefined,
-  });
-
-const field = (label: string, value: string) => para([run(`${label}：`, { bold: true }), run(value)], { indent: 420 });
-
-const heading = (text: string) => para([run(text, { font: HEAD, size: 28, bold: true })], { before: 240, after: 120 });
-
-function infoTable(r: ReportInput) {
-  const border = { style: BorderStyle.SINGLE, size: 4, color: '999999' };
-  const borders = { top: border, bottom: border, left: border, right: border };
-  const cell = (text: string, label = false, span = 1) =>
-    new TableCell({
-      columnSpan: span,
-      borders,
-      width: { size: label ? 1400 : 3100, type: WidthType.DXA },
-      shading: label ? { fill: 'F2F2F2' } : undefined,
-      margins: { top: 60, bottom: 60, left: 100, right: 100 },
-      children: [new Paragraph({ children: [run(text, { bold: label, size: 21 })] })],
-    });
-  const rows = [
-    [cell('课程名称', true), cell(r.course.name), cell('专业', true), cell(r.course.major)],
-    [cell('培养类型', true), cell(r.course.trainingType), cell('学生年级', true), cell(`${r.course.studentGrade}级`)],
-    [cell('对照方案', true), cell(planLabel(r) + (r.course.adjustNote ? `（调整说明：${r.course.adjustNote}）` : ''), false, 3)],
-    [cell('检查次数', true), cell(`第${r.seq}次`), cell('检查时间', true), cell(r.checkedAt)],
-    [cell('检查结论', true), cell(verdictText(r.verdict), false, 3)],
-  ];
-  return new Table({
-    width: { size: 9000, type: WidthType.DXA },
-    columnWidths: [1400, 3100, 1400, 3100],
-    rows: rows.map((cells) => new TableRow({ children: cells })),
-  });
-}
+const field = (label: string, value: string, size = 22, after = 60) => new Paragraph({
+  children: [run(`${label}：`, true, size), ...value.split(/\r?\n/).map((text, n) => new TextRun({ text, break: n ? 1 : undefined, size, color: '000000', font: BODY }))],
+  spacing: { after, line: size === 20 ? 280 : 320, lineRule: LineRuleType.AT_LEAST },
+});
 
 export async function reportDocx(r: ReportInput): Promise<Buffer> {
   const { major, suggest } = split(r.result);
-  const children: (Paragraph | Table)[] = [];
-  children.push(
-    para([run(`《${r.course.name}》教学大纲修改清单`, { font: HEAD, size: 36, bold: true })], {
-      align: AlignmentType.CENTER,
-      after: 240,
-    }),
-  );
-  children.push(infoTable(r));
+  const children: Paragraph[] = [
+    new Paragraph({ text: reportTitle(r), heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
+    new Paragraph({ children: [run(reportScope(r), false, 20)], spacing: { after: 80, line: 280 } }),
+    new Paragraph({ children: [run(reportMeta(r), false, 20)] }),
+  ];
+  if (r.course.adjustNote) children.push(field('对照方案调整说明', r.course.adjustNote, 20));
+  children.push(field('检查结论', verdictText(r.verdict), 20, 140));
 
-  children.push(heading(`一、明确问题及重大问题（共${major.length}项）`));
-  if (!major.length) children.push(para([run('无。')], { indent: 420 }));
-  major.forEach((i, n) => {
-    children.push(para([run(`问题${n + 1}　【${i.nature}】${i.title}`, { bold: true })], { before: 120 }));
-    children.push(field('所在位置', i.location), field('当前问题', i.problem), field('整改意见', i.advice));
-  });
-
-  children.push(heading(`二、建议修改（共${suggest.length}项）`));
-  if (!suggest.length) children.push(para([run('无。')], { indent: 420 }));
-  suggest.forEach((i, n) => {
-    children.push(para([run(`建议${n + 1}　${i.title}`, { bold: true })], { before: 120 }));
-    children.push(field('所在位置', i.location), field('当前问题', i.problem), field('整改意见', i.advice));
-  });
-
-  if (r.result.toVerify.length) {
-    children.push(heading('附：需核实事项'));
-    children.push(para([run('以下事项仅凭本次提交的大纲无法确认，不属于已确认问题，请结合相关材料核实。', { size: 21, color: '555555' })]));
-    r.result.toVerify.forEach((v, n) =>
-      children.push(para([run(`${n + 1}. `), ...(v.location ? [run(`${v.location}：`, { bold: true })] : []), run(v.content)], { indent: 210 })),
-    );
+  for (const [title, prefix, issues] of [
+    ['一 明确问题及重大问题', 'A', major],
+    ['二 建议修改项', 'B', suggest],
+  ] as const) {
+    children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1 }));
+    if (!issues.length) children.push(new Paragraph({ children: [run('无。')] }));
+    issues.forEach((issue, n) => children.push(
+      new Paragraph({ text: `${issueNumber(prefix, n)} ${issue.title}`, heading: HeadingLevel.HEADING_2 }),
+      field('位置', issue.location, 20),
+      field('问题', issue.problem),
+      field('整改意见', issue.advice, 22, 140),
+    ));
   }
-
-  children.push(
-    para([run('注：本清单由 AI 依据教学大纲检查清单生成，供修改参考；问题编号仅用于识别和引用，不代表整改顺序。', { size: 18, color: '777777' })], {
-      before: 360,
-    }),
-  );
+  if (r.result.toVerify.length) {
+    children.push(new Paragraph({ text: '附 需核实事项', heading: HeadingLevel.HEADING_1 }));
+    children.push(new Paragraph({ children: [run('以下事项仅凭本次提交的大纲无法确认，不属于已确认问题，请结合相关材料核实。', false, 20)] }));
+    r.result.toVerify.forEach((v, n) => children.push(new Paragraph({ children: [run(`${n + 1}. ${v.location ? `${v.location}：` : ''}${v.content}`)] })));
+  }
+  children.push(new Paragraph({ children: [run(REPORT_NOTE, false, 18)], spacing: { before: 160 } }));
 
   const doc = new Document({
-    styles: { default: { document: { run: { font: { name: BODY, eastAsia: BODY }, size: 24 } } } },
-    sections: [
-      {
-        properties: { page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } },
-        children,
-      },
-    ],
+    styles: { default: {
+      document: { run: { font: BODY, size: 22, color: '000000' }, paragraph: { spacing: { line: 320, after: 80 } } },
+      title: { run: { font: HEAD, size: 38, color: '000000' }, paragraph: { spacing: { line: 480, after: 80 }, keepNext: true } },
+      heading1: { run: { font: HEAD, size: 28, bold: true, color: '000000' }, paragraph: { spacing: { before: 160, after: 80, line: 400 }, keepNext: true } },
+      heading2: { run: { font: HEAD, size: 24, bold: true, color: '000000' }, paragraph: { spacing: { before: 160, after: 80, line: 340 }, keepNext: true } },
+    } },
+    sections: [{
+      properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1020, bottom: 1020, left: 1191, right: 1191 } } },
+      children,
+    }],
   });
   return Packer.toBuffer(doc);
 }

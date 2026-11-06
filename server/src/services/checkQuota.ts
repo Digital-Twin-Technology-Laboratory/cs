@@ -11,5 +11,8 @@ export function getCheckQuota(userId: number) {
       COUNT(CASE WHEN status = 'running' THEN 1 END) AS running
     FROM submissions WHERE user_id = ?
   `).get(userId) as { used: number; pending: number; running: number };
-  return { ...counts, limit: DAILY_CHECK_LIMIT, remaining: Math.max(0, DAILY_CHECK_LIMIT - counts.used - counts.pending) };
+  const grant = db.prepare("SELECT amount FROM check_quota_grants WHERE user_id = ? AND quota_date = date('now','localtime')").get(userId) as { amount: number } | undefined;
+  const bonus = grant?.amount ?? 0;
+  const limit = DAILY_CHECK_LIMIT + bonus;
+  return { ...counts, bonus, limit, remaining: Math.max(0, limit - counts.used - counts.pending) };
 }

@@ -1,4 +1,5 @@
-import { Alert, App, Breadcrumb, Button, Card, Checkbox, Input, Segmented, Space, Spin, Table, Tag } from 'antd';
+import { Alert, App, Breadcrumb, Button, Card, Checkbox, Input, Segmented, Space, Spin, Tag } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -173,7 +174,6 @@ export default function ChecklistEditor() {
                 rowKey="key"
                 pagination={false}
                 dataSource={draft.items.filter((i) => i.section === sec)}
-                scroll={{ x: 800 }}
                 columns={[
                   { title: '编号', width: 90, render: (_, r) => <Input value={r.code} onChange={(e) => setItem(r.key, { code: e.target.value.toUpperCase() })} /> },
                   { title: SECTION_TITLES[sec].colTitle, width: 200, render: (_, r) => <Input.TextArea value={r.title} autoSize onChange={(e) => setItem(r.key, { title: e.target.value })} /> },

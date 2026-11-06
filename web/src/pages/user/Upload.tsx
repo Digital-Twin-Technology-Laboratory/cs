@@ -1,4 +1,5 @@
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Table, Tag, Upload as AntUpload } from 'antd';
+import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag, Upload as AntUpload } from 'antd';
+import Table from '../../components/ResponsiveTable';
 import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { useEffect, useState } from 'react';
@@ -90,7 +91,7 @@ export default function Upload() {
       {checkQuota?.remaining === 0 && (
         <Alert type="warning" showIcon style={{ marginBottom: 16 }}
           title={checkQuota.used >= checkQuota.limit ? '今日检查次数已用完，请联系管理员。' : '可用名额已被排队或检查中的任务占用，请等待任务完成或联系管理员。'}
-          description={`每天最多成功检查 ${checkQuota.limit} 次，发现问题也计次；检查失败不计次数，每天零点恢复。`} />
+          description={`今日额度共 ${checkQuota.limit} 次，含管理员追加 ${checkQuota.bonus} 次。发现问题也计次，检查失败不计次；次日零点恢复基础 5 次。`} />
       )}
       <Card>
         <Form
@@ -146,7 +147,6 @@ export default function Upload() {
               rowKey="uid"
               dataSource={files}
               pagination={false}
-              scroll={{ x: 960 }}
               style={{ marginBottom: 20 }}
               columns={[
                 { title: '大纲文件', dataIndex: 'name', width: 200, render: (name) => <span style={{ overflowWrap: 'anywhere' }}>{name}</span> },
