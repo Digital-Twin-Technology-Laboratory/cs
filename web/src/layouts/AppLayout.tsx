@@ -21,7 +21,6 @@ export default function AppLayout() {
   const items = [
     { key: '/upload', label: <Link to="/upload">上传检查</Link> },
     { key: '/submissions', label: <Link to="/submissions">上传记录</Link> },
-    { key: '/courses', label: <Link to="/courses">我的课程</Link> },
     ...(user?.role === 'admin' ? [{ key: '/admin', label: <Link to="/admin">管理后台</Link> }] : []),
   ];
 
