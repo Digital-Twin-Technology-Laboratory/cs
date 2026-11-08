@@ -154,7 +154,18 @@ adminRouter.get('/users', (req, res) => {
     args.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
   if (status) where.push('u.status = ?'), args.push(status);
-  if (role) where.push('u.role = ?'), args.push(role);
+  if (role === 'teaching' || role === 'program') {
+    where.push('u.college_role = ?');
+    args.push(role);
+  } else if (role === 'group_leader') {
+    where.push('EXISTS (SELECT 1 FROM course_group_leaders g WHERE g.user_id = u.id)');
+  } else if (role === 'user') {
+    where.push("u.role = 'user' AND u.college_role = 'none'");
+    where.push('NOT EXISTS (SELECT 1 FROM course_group_leaders g WHERE g.user_id = u.id)');
+  } else if (role) {
+    where.push('u.role = ?');
+    args.push(role);
+  }
   const w = where.join(' AND ');
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM users u WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db

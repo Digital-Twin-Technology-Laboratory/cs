@@ -135,11 +135,14 @@ export default function Users() {
           <Select
             value={filter.role}
             onChange={(role) => (setPage(1), setFilter((f) => ({ ...f, role })))}
-            style={{ width: 130 }}
+            style={{ width: 180 }}
             options={[
               { value: '', label: '全部角色' },
               { value: 'admin', label: '管理员' },
-              { value: 'user', label: '普通用户' },
+              { value: 'teaching', label: '教学条线（全院）' },
+              { value: 'program', label: '专业负责人（全院）' },
+              { value: 'group_leader', label: '课程组长' },
+              { value: 'user', label: '普通教师' },
             ]}
           />
         </Space>
