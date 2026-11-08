@@ -18,12 +18,13 @@ export interface UserRow {
   name: string;
   department: string;
   role: 'admin' | 'user';
+  college_role: 'none' | 'teaching' | 'program';
   status: 'pending' | 'active' | 'disabled';
   created_at: string;
   last_login_at: string | null;
 }
 
-export type PublicUser = Omit<UserRow, 'password_hash'>;
+export type PublicUser = Omit<UserRow, 'password_hash'> & { led_groups: string[] };
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -37,7 +38,8 @@ declare global {
 export function toPublic(u: UserRow): PublicUser {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { password_hash, ...rest } = u;
-  return rest;
+  const groups = db.prepare('SELECT course_group FROM course_group_leaders WHERE user_id = ? ORDER BY course_group').all(u.id) as { course_group: string }[];
+  return { ...rest, led_groups: groups.map((g) => g.course_group) };
 }
 
 /** 基于 SQLite 的会话存储 */

@@ -1,4 +1,4 @@
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag, Upload as AntUpload } from 'antd';
+import { Alert, App, AutoComplete, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag, Upload as AntUpload } from 'antd';
 import Table from '../../components/ResponsiveTable';
 import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
@@ -154,7 +154,9 @@ export default function Upload() {
                   title: '课程名称', width: 210,
                   render: (_: unknown, file: UploadFile) => (
                     <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
-                      <Input maxLength={100} disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的课程名称`} />
+                      <AutoComplete options={(options?.requiredCourses ?? []).map((c) => ({ value: c.name }))} filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
+                        <Input maxLength={100} aria-label={`${file.name}的课程名称`} />
+                      </AutoComplete>
                     </Form.Item>
                   ),
                 },
@@ -191,7 +193,7 @@ export default function Upload() {
               ]}
             />
           )}
-          {files.length > 0 && <p className="muted small">系统按每行的专业及统一检查设置匹配培养方案；未预置方案时仍可检查，相关比对内容将列为“需核实事项”。课程名称默认取文件名，可逐行修改。</p>}
+          {files.length > 0 && <p className="muted small">系统按每行的专业及统一检查设置匹配培养方案；未预置方案时仍可检查，相关比对内容将列为“需核实事项”。课程名称默认取文件名，请从下拉提示中选择名单中的准确课程名，以便计入个人总览；名单外课程仍可上传。</p>}
           <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
             {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>

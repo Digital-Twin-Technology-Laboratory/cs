@@ -13,9 +13,39 @@ import { reportDocx, reportText, type ReportInput } from '../services/report.js'
 import { SECTION_META } from '../seed/checklist.js';
 import type { CheckResult } from '../services/ai/schema.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
+import { getProgress, leadsSubmission } from '../services/progress.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
+
+userRouter.get('/progress', (req, res) => {
+  const person = getProgress(req.user!.username)[0];
+  res.json({
+    configured: !!db.prepare("SELECT 1 FROM settings WHERE key = 'progress_roster'").get(),
+    required: person?.required_count ?? 0,
+    uploaded: person?.uploaded_count ?? 0,
+    passed: person?.passed_count ?? 0,
+    confirmed: person?.confirmed_count ?? 0,
+    courses: person?.courses ?? [],
+  });
+});
+
+userRouter.get('/supervision/progress', (req, res) => {
+  const user = req.user!;
+  const college = user.role === 'admin' || user.college_role !== 'none';
+  if (!college && !user.led_groups.length) return res.status(403).json({ error: '没有课程监督权限' });
+  const people = getProgress(undefined, college ? undefined : user.led_groups, !college);
+  const rows = people.flatMap((p) => p.courses.map((course) => ({
+    ...course, username: p.username, name: p.name,
+    can_confirm: course.in_plan === 1 && user.led_groups.includes(course.course_group),
+  })));
+  res.json({
+    college, groups: [...new Set(rows.map((r) => r.course_group))].sort(), rows,
+    summary: { people: people.length, required: rows.length, uploaded: rows.filter((r) => r.latest_id !== null).length,
+      passed: rows.filter((r) => r.status === 'done' && r.verdict === 'passed').length,
+      confirmed: rows.filter((r) => r.status === 'done' && r.confirmed_at !== null).length },
+  });
+});
 
 const thisYear = new Date().getFullYear();
 const majors = ['计算机科学与技术', '人工智能', '物联网工程', '中外物联网'] as const;
@@ -73,7 +103,7 @@ userRouter.get('/checklist.docx', async (_req, res) => {
   res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(buffer);
 });
 
-userRouter.get('/options', (_req, res) => {
+userRouter.get('/options', (req, res) => {
   const plans = db
     .prepare('SELECT major, training_type, grade, name FROM training_plans WHERE enabled = 1 ORDER BY major, training_type, grade')
     .all() as { major: string; training_type: string; grade: number; name: string }[];
@@ -87,6 +117,7 @@ userRouter.get('/options', (_req, res) => {
     maxUploadMB: site.maxUploadMB,
     aiReady: aiReady() === null,
     checklist: checklist ? { id: checklist.id, name: checklist.name } : null,
+    requiredCourses: db.prepare('SELECT course_name AS name FROM progress_requirements WHERE username = ? ORDER BY course_name').all(req.user!.username),
   });
 });
 
@@ -205,11 +236,12 @@ type SubFull = {
   checklist_version_id: number | null; plan_id: number | null; plan_name: string | null; course_snapshot: string; ai_model: string | null;
   status: string; error: string | null; verdict: 'passed' | 'failed' | null; result_json: string | null; created_at: string; started_at: string | null; finished_at: string | null;
   confirmed_at: string | null;
+  confirmed_by: string;
 };
 
 function getOwnSub(req: Request, res: Response): SubFull | null {
   const s = db.prepare('SELECT * FROM submissions WHERE id = ?').get(Number(req.params.id)) as SubFull | undefined;
-  if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin')) {
+  if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin' && req.user!.college_role === 'none' && !leadsSubmission(req.user!, s.id))) {
     res.status(404).json({ error: '记录不存在' });
     return null;
   }
@@ -259,7 +291,7 @@ userRouter.get('/submissions/:id', (req, res) => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { result_json, course_snapshot, file_path, ...rest } = s;
   res.json({
-    submission: { ...rest, course: JSON.parse(course_snapshot), result: result_json ? JSON.parse(result_json) : null, queuePosition, owner },
+    submission: { ...rest, canConfirm: s.user_id === req.user!.id || leadsSubmission(req.user!, s.id, true), course: JSON.parse(course_snapshot), result: result_json ? JSON.parse(result_json) : null, queuePosition, owner },
     checklist: checklist
       ? { id: checklist.id, name: checklist.name, items: checklist.items.map(({ code, section, title, content }) => ({ code, section, title, content })) }
       : null,
@@ -270,13 +302,15 @@ userRouter.get('/submissions/:id', (req, res) => {
 userRouter.post('/submissions/:id/confirm', (req, res) => {
   const s = getOwnSub(req, res);
   if (!s) return;
-  if (s.user_id !== req.user!.id) return res.status(403).json({ error: '只能确认上传自己的检查结果' });
+  const isLeader = leadsSubmission(req.user!, s.id, true);
+  if (s.user_id !== req.user!.id && !isLeader) return res.status(403).json({ error: '只能确认本人结果或本组磨课清单内课程的最新结果' });
   if (s.status !== 'done' || !s.result_json || !s.verdict) {
     return res.status(400).json({ error: '检查完成后才能确认上传结果' });
   }
   const confirmedAt = db.transaction(() => {
-    const updated = db.prepare("UPDATE submissions SET confirmed_at = datetime('now','localtime') WHERE id = ? AND confirmed_at IS NULL").run(s.id);
-    if (updated.changes) audit(req.user, '确认上传结果', `记录#${s.id}`, undefined, req.ip);
+    const actor = `${isLeader ? '课程组长' : '上传者'}：${req.user!.name}（${req.user!.username}）`;
+    const updated = db.prepare("UPDATE submissions SET confirmed_at = datetime('now','localtime'), confirmed_by = ? WHERE id = ? AND confirmed_at IS NULL").run(actor, s.id);
+    if (updated.changes) audit(req.user, isLeader ? '课程组长最终确认' : '确认上传结果', `记录#${s.id}`, actor, req.ip);
     return (db.prepare('SELECT confirmed_at FROM submissions WHERE id = ?').get(s.id) as { confirmed_at: string }).confirmed_at;
   })();
   res.json({ ok: true, confirmedAt });
@@ -324,6 +358,7 @@ userRouter.get('/submissions/:id/report.txt', (req, res) => {
 userRouter.post('/submissions/:id/recheck', (req, res) => {
   const s = getOwnSub(req, res);
   if (!s) return;
+  if (s.user_id !== req.user!.id && req.user!.role !== 'admin') return res.status(403).json({ error: '只能重新检查本人的记录' });
   if (s.status !== 'failed') return res.status(400).json({ error: '只有检查失败的记录可以重新检查' });
   if (!getCheckQuota(s.user_id).remaining) return res.status(429).json({ error: CHECK_QUOTA_ERROR });
   const notReady = aiReady();

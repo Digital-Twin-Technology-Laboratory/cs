@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../api';
 import { SubmissionTag } from '../../components/StatusTag';
 import type { SubStatus } from '../../types';
+import RosterProgress from './RosterProgress';
 
 interface Stats {
   users: number;
@@ -60,6 +61,8 @@ export default function Dashboard() {
           action={<Button size="small" onClick={() => nav('/admin/users?status=pending')}>去审核</Button>}
         />
       )}
+      <RosterProgress />
+      <h2 className="section-title">全站数据（不受统计名单限制）</h2>
       <Row gutter={[16, 16]}>
         {tile('用户数', s?.users, '/admin/users')}
         {tile('课程数', s?.courses, '/admin/records')}

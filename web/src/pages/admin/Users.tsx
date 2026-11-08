@@ -8,6 +8,7 @@ import { api, qs } from '../../api';
 import { useAuth } from '../../auth';
 import { UserStatusTag } from '../../components/StatusTag';
 import type { CheckQuota, User } from '../../types';
+import SupervisionRoles from './SupervisionRoles';
 
 type Row = User & { course_count: number; submission_count: number; checkQuota: CheckQuota };
 
@@ -110,6 +111,7 @@ export default function Users() {
           <div className="sub">管理账号、导入教工名单和增加今日检查次数。展开用户可查看注册及登录信息。</div>
         </div>
         <Space wrap>
+          <SupervisionRoles />
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入教工名单</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
             新建账号
@@ -155,6 +157,7 @@ export default function Users() {
             { title: '用户', width: 210, render: (_, r) => <div><strong className="user-name" title={r.name}>{r.name}{r.id === me?.id && <Tag style={{ marginLeft: 8 }}>我</Tag>}</strong><div className="muted small">{r.username}</div></div> },
             { title: '部门', dataIndex: 'department', width: 120, render: (v) => v || '—' },
             { title: '账号状态', width: 140, render: (_, r) => <Space size={4} wrap>{r.role === 'admin' && <Tag color="blue">管理员</Tag>}<UserStatusTag status={r.status} /></Space> },
+            { title: '监督身份', width: 160, render: (_, r) => <Select value={r.college_role} style={{ width: '100%' }} aria-label={`${r.name}的监督身份`} onChange={(college_role) => update(r, { college_role }, '监督身份已更新')} options={[{ value: 'none', label: '普通教师' }, { value: 'teaching', label: '教学条线（全院）' }, { value: 'program', label: '专业负责人（全院）' }]} /> },
             {
               title: '课程 / 检查',
               width: 110,

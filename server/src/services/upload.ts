@@ -17,12 +17,12 @@ export function fixName(name: string) {
 }
 
 /** 单文件上传中间件（字段名 file），大小上限取系统设置 */
-export function singleUpload(exts: string[]) {
+function uploadMiddleware(exts: string[], fields?: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const maxMB = getSettings('site').maxUploadMB;
-    const up = multer({
+    const uploader = multer({
       dest: TMP_DIR,
-      limits: { fileSize: maxMB * 1024 * 1024, files: 1 },
+      limits: { fileSize: maxMB * 1024 * 1024, files: fields?.length ?? 1 },
       fileFilter: (_req, file, cb) => {
         file.originalname = fixName(file.originalname);
         const ext = path.extname(file.originalname).toLowerCase();
@@ -30,7 +30,8 @@ export function singleUpload(exts: string[]) {
         if (!exts.includes(ext)) return cb(new Error(`只支持 ${exts.join('、')} 文件`));
         cb(null, true);
       },
-    }).single('file');
+    });
+    const up = fields ? uploader.fields(fields.map((name) => ({ name, maxCount: 1 }))) : uploader.single('file');
     up(req, res, (err: unknown) => {
       if (err) {
         const msg =
@@ -43,6 +44,9 @@ export function singleUpload(exts: string[]) {
     });
   };
 }
+
+export const singleUpload = (exts: string[]) => uploadMiddleware(exts);
+export const multipleUpload = (exts: string[], fields: string[]) => uploadMiddleware(exts, fields);
 
 /** 把临时文件移入正式目录，返回相对 DATA_DIR 的路径 */
 export function storeFile(tmpPath: string, subdir: string, originalName: string): string {

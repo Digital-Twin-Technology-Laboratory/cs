@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import fs from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
-import { CsvError, parse } from 'csv-parse/sync';
-import { InvalidInputError, InvalidSpreadsheetError, readSheet, SheetNotFoundError } from 'read-excel-file/node';
 import { z } from 'zod';
 import { audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
@@ -13,9 +11,12 @@ import { aiReady, listModels, testConnection } from '../services/ai/provider.js'
 import { loadChecklist } from '../services/checklist.js';
 import { aiStructureChecklist, parseChecklistFile } from '../services/checklistImport.js';
 import { extractFile, ExtractError } from '../services/extract.js';
-import { cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
+import { cleanupTmp, multipleUpload, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { kickQueue } from '../services/checkQueue.js';
 import { getCheckQuota } from '../services/checkQuota.js';
+import { readRoster, RosterImportError } from '../services/rosterImport.js';
+import { getProgress, readProgressRoster } from '../services/progress.js';
+import { COLLEGE_PRESETS, GROUP_PRESETS } from '../services/supervisionRoles.js';
 import { passwordSchema } from './auth.js';
 import { COURSE_LIST_SQL } from './user.js';
 
@@ -51,7 +52,98 @@ adminRouter.get('/stats', (_req, res) => {
   });
 });
 
+adminRouter.get('/progress', (_req, res) => {
+  const meta = db.prepare("SELECT value FROM settings WHERE key = 'progress_roster'").get() as { value: string } | undefined;
+  const rows = getProgress();
+  res.json({
+    roster: meta ? JSON.parse(meta.value) : null,
+    summary: {
+      total: rows.length,
+      uploaded: rows.filter((r) => r.uploaded_count > 0).length,
+      passed: rows.filter((r) => r.required_count > 0 && r.passed_count === r.required_count).length,
+      confirmed: rows.filter((r) => r.confirmed_count > 0).length,
+      requiredOutlines: rows.reduce((n, r) => n + r.required_count, 0),
+      uploadedOutlines: rows.reduce((n, r) => n + r.uploaded_count, 0),
+      passedOutlines: rows.reduce((n, r) => n + r.passed_count, 0),
+      confirmedOutlines: rows.reduce((n, r) => n + r.confirmed_count, 0),
+    },
+    rows,
+  });
+});
+
+adminRouter.post('/progress/import', multipleUpload(['.xlsx'], ['timetable', 'plan']), async (req, res) => {
+  const files = req.files as Record<string, Express.Multer.File[]>;
+  const timetable = files?.timetable?.[0];
+  const plan = files?.plan?.[0];
+  try {
+    if (!timetable || !plan) return res.status(400).json({ error: '请同时上传整周课表和磨课计划（.xlsx）' });
+    const { people, requirements, sourceRows, mergedRows, planPairs, warnings } = await readProgressRoster(timetable, plan);
+    db.transaction(() => {
+      db.exec('DELETE FROM progress_roster');
+      const insert = db.prepare('INSERT INTO progress_roster (username, name) VALUES (?, ?)');
+      for (const person of people) insert.run(person.username, person.name);
+      const insertCourse = db.prepare('INSERT INTO progress_requirements (username, course_name, course_group, in_plan) VALUES (?, ?, ?, ?)');
+      for (const r of requirements) insertCourse.run(r.username, r.course, r.group, r.inPlan);
+      db.prepare(`
+        INSERT INTO settings (key, value)
+        VALUES ('progress_roster', json_set(?, '$.importedAt', datetime('now','localtime')))
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(JSON.stringify({ timetableName: timetable.originalname, planName: plan.originalname, sourceRows, mergedRows, planPairs, warnings }));
+      audit(req.user, '导入统计名单', timetable.originalname, `${people.length} 人、${requirements.length} 份应交大纲；磨课核对 ${warnings.length} 项待核实；整体替换，不修改账号及检查记录`, req.ip);
+    })();
+    res.json({ people: people.length, required: requirements.length, mergedRows, warnings });
+  } catch (e) {
+    if (e instanceof RosterImportError) return res.status(400).json({ error: e.message });
+    throw e;
+  } finally {
+    cleanupTmp(timetable);
+    cleanupTmp(plan);
+  }
+});
+
 // ---------- 用户管理 ----------
+adminRouter.get('/supervision-roles', (_req, res) => {
+  res.json({
+    users: db.prepare('SELECT id, username, name, college_role, status FROM users ORDER BY name, username').all(),
+    groups: GROUP_PRESETS.map((g) => ({ ...g, userId: (db.prepare('SELECT user_id FROM course_group_leaders WHERE course_group = ?').get(g.group) as { user_id: number } | undefined)?.user_id ?? null })),
+    college: COLLEGE_PRESETS,
+  });
+});
+
+adminRouter.put('/supervision-roles/groups', (req, res) => {
+  const { groups } = z.object({ groups: z.array(z.object({ group: z.string(), userId: z.number().int().positive().nullable() })).max(8) }).parse(req.body);
+  if (new Set(groups.map((g) => g.group)).size !== groups.length || groups.some((g) => !GROUP_PRESETS.some((p) => p.group === g.group))) {
+    return res.status(400).json({ error: '请选择八个正式课程组，课程组不能重复' });
+  }
+  if (groups.some((g) => g.userId !== null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(g.userId))) return res.status(400).json({ error: '所选账号不存在，请刷新后重试' });
+  db.transaction(() => {
+    for (const g of groups) {
+      if (g.userId === null) db.prepare('DELETE FROM course_group_leaders WHERE course_group = ?').run(g.group);
+      else db.prepare('INSERT INTO course_group_leaders (course_group, user_id) VALUES (?, ?) ON CONFLICT(course_group) DO UPDATE SET user_id = excluded.user_id').run(g.group, g.userId);
+    }
+    audit(req.user, '设置课程组长', undefined, JSON.stringify(groups), req.ip);
+  })();
+  res.json({ ok: true });
+});
+
+adminRouter.post('/supervision-roles/apply-presets', (req, res) => {
+  const names = [...new Set([...COLLEGE_PRESETS, ...GROUP_PRESETS].map((p) => p.name))];
+  const resolved = new Map<string, number>();
+  const missing: string[] = [];
+  for (const name of names) {
+    const matches = db.prepare('SELECT id FROM users WHERE name = ?').all(name) as { id: number }[];
+    if (matches.length > 1) return res.status(400).json({ error: `${name} 存在同名账号，请按工号手动设置权限` });
+    if (matches.length) resolved.set(name, matches[0].id);
+    else missing.push(name);
+  }
+  db.transaction(() => {
+    for (const p of COLLEGE_PRESETS) if (resolved.has(p.name)) db.prepare('UPDATE users SET college_role = ? WHERE id = ?').run(p.role, resolved.get(p.name));
+    for (const p of GROUP_PRESETS) if (resolved.has(p.name)) db.prepare('INSERT INTO course_group_leaders (course_group, user_id) VALUES (?, ?) ON CONFLICT(course_group) DO UPDATE SET user_id = excluded.user_id').run(p.group, resolved.get(p.name));
+    audit(req.user, '按指定名单设置监督权限', undefined, `已匹配 ${resolved.size} 人；尚未建号：${missing.join('、')}`, req.ip);
+  })();
+  res.json({ matched: resolved.size, missing });
+});
+
 adminRouter.get('/users', (req, res) => {
   const { q = '', status = '', role = '' } = req.query as Record<string, string>;
   const { page, pageSize, offset } = paging(req.query);
@@ -67,7 +159,7 @@ adminRouter.get('/users', (req, res) => {
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM users u WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db
     .prepare(
-      `SELECT u.id, u.username, u.name, u.department, u.role, u.status, u.roster_login, u.created_at, u.last_login_at,
+      `SELECT u.id, u.username, u.name, u.department, u.role, u.college_role, u.status, u.roster_login, u.created_at, u.last_login_at,
         (SELECT COUNT(*) FROM courses WHERE user_id = u.id) AS course_count,
         (SELECT COUNT(*) FROM submissions WHERE user_id = u.id) AS submission_count
        FROM users u WHERE ${w} ORDER BY (u.status = 'pending') DESC, u.id DESC LIMIT ? OFFSET ?`,
@@ -98,45 +190,7 @@ adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, r
   const file = req.file;
   try {
     if (!file) return res.status(400).json({ error: '请选择教工名单文件' });
-    const contents = await fs.readFile(file.path);
-    let rows: unknown[][];
-    try {
-      rows = file.originalname.toLowerCase().endsWith('.xlsx')
-        ? await readSheet(contents, { parseNumber: (value) => value })
-        : parse(contents, { bom: true, trim: true, skip_empty_lines: true });
-    } catch (e) {
-      if (e instanceof CsvError || e instanceof InvalidInputError || e instanceof InvalidSpreadsheetError || e instanceof SheetNotFoundError) {
-        return res.status(400).json({ error: `名单文件解析失败，请检查文件格式：${e.message}` });
-      }
-      throw e;
-    }
-
-    const headers = (rows[0] ?? []).map((cell) => String(cell ?? '').trim());
-    if (headers.filter((cell) => cell === '姓名').length !== 1 || headers.filter((cell) => cell === '工号').length !== 1) {
-      return res.status(400).json({ error: '名单首行必须包含“姓名”和“工号”两列，且列名不能重复' });
-    }
-    const nameColumn = headers.indexOf('姓名');
-    const numberColumn = headers.indexOf('工号');
-    const entrySchema = z.object({
-      name: z.string().min(1, '姓名不能为空').max(50, '姓名最多50个字符'),
-      username: z.string().min(1, '工号不能为空').max(32, '工号最多32个字符').regex(/^[A-Za-z0-9_.@-]+$/, '工号只能包含字母、数字及 _ . @ -'),
-    });
-    const entries: { name: string; username: string }[] = [];
-    const seen = new Set<string>();
-    for (const [index, row] of rows.entries()) {
-      if (index === 0 || row.every((cell) => !String(cell ?? '').trim())) continue;
-      const entry = entrySchema.safeParse({
-        name: String(row[nameColumn] ?? '').trim(),
-        username: String(row[numberColumn] ?? '').trim(),
-      });
-      if (!entry.success) return res.status(400).json({ error: `第 ${index + 1} 行：${entry.error.issues.map((issue) => issue.message).join('；')}` });
-      const key = entry.data.username.toLowerCase();
-      if (seen.has(key)) return res.status(400).json({ error: `第 ${index + 1} 行：工号 ${entry.data.username} 在名单中重复` });
-      seen.add(key);
-      entries.push(entry.data);
-    }
-    if (!entries.length) return res.status(400).json({ error: '名单中没有教工数据' });
-
+    const { entries } = await readRoster(file);
     const imported = db.transaction(() => {
       const insert = db.prepare(
         "INSERT INTO users (username, password_hash, name, role, status, roster_login) VALUES (?, '', ?, 'user', 'active', 1) ON CONFLICT(username) DO NOTHING",
@@ -146,6 +200,9 @@ adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, r
     const skipped = entries.length - imported;
     audit(req.user, '导入教工名单', file.originalname, `导入 ${imported} 个待激活教工账号，跳过 ${skipped} 个已有工号`, req.ip);
     res.json({ imported, skipped });
+  } catch (e) {
+    if (e instanceof RosterImportError) return res.status(400).json({ error: e.message });
+    throw e;
   } finally {
     cleanupTmp(file);
   }
@@ -162,6 +219,7 @@ adminRouter.put('/users/:id', (req, res) => {
       name: z.string().trim().min(1).max(50).optional(),
       department: z.string().trim().max(100).optional(),
       role: z.enum(['admin', 'user']).optional(),
+      college_role: z.enum(['none', 'teaching', 'program']).optional(),
       status: z.enum(['active', 'disabled', 'pending']).optional(),
     })
     .parse(req.body);
@@ -175,11 +233,12 @@ adminRouter.put('/users/:id', (req, res) => {
   if (u.role === 'admin' && u.status === 'active' && (next.role !== 'admin' || next.status !== 'active') && activeAdmins() <= 1) {
     return res.status(400).json({ error: '系统至少需要保留一个可用的管理员账号' });
   }
-  db.prepare('UPDATE users SET name = ?, department = ?, role = ?, status = ? WHERE id = ?').run(next.name, next.department, next.role, next.status, id);
+  db.prepare('UPDATE users SET name = ?, department = ?, role = ?, status = ?, college_role = ? WHERE id = ?').run(next.name, next.department, next.role, next.status, next.college_role, id);
   if (next.status !== 'active') db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(id);
   const changes = [
     body.status && body.status !== u.status ? `状态：${u.status}→${body.status}` : '',
     body.role && body.role !== u.role ? `角色：${u.role}→${body.role}` : '',
+    body.college_role && body.college_role !== u.college_role ? `监督身份：${u.college_role}→${body.college_role}` : '',
   ].filter(Boolean);
   audit(req.user, u.status === 'pending' && body.status === 'active' ? '审核通过' : '修改账号', u.username, changes.join('；'), req.ip);
   res.json({ user: toPublic(db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow) });

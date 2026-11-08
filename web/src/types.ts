@@ -9,6 +9,8 @@ export interface User {
   name: string;
   department: string;
   role: Role;
+  college_role: 'none' | 'teaching' | 'program';
+  led_groups: string[];
   status: UserStatus;
   created_at: string;
   last_login_at: string | null;
@@ -59,6 +61,27 @@ export interface CheckResult {
 
 export type SubStatus = 'queued' | 'running' | 'done' | 'failed';
 
+export interface RequiredCourseProgress {
+  course_name: string;
+  course_group: string;
+  in_plan: number;
+  latest_id: number | null;
+  status: SubStatus | null;
+  verdict: 'passed' | 'failed' | null;
+  confirmed_at: string | null;
+  confirmed_by: string;
+  created_at: string | null;
+}
+
+export interface PersonalProgress {
+  configured: boolean;
+  required: number;
+  uploaded: number;
+  passed: number;
+  confirmed: number;
+  courses: RequiredCourseProgress[];
+}
+
 export interface CourseInfo {
   name: string;
   major: string;
@@ -75,6 +98,7 @@ export interface SubmissionDetail {
   seq: number;
   file_name: string;
   file_size: number;
+  extracted_text: string;
   checklist_version_id: number | null;
   plan_id: number | null;
   plan_name: string | null;
@@ -86,6 +110,8 @@ export interface SubmissionDetail {
   started_at: string | null;
   finished_at: string | null;
   confirmed_at: string | null;
+  confirmed_by: string;
+  canConfirm: boolean;
   course: CourseInfo;
   result: CheckResult | null;
   queuePosition: number | null;
@@ -131,6 +157,7 @@ export interface SubmissionRow {
 }
 
 export interface Options {
+  requiredCourses: { name: string }[];
   majors: string[];
   studentGrades: number[];
   plans: { major: string; training_type: string; grade: number; name: string }[];

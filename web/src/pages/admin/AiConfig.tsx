@@ -184,7 +184,7 @@ export default function AiConfig() {
       <Card className="ai-profile-picker">
         <div className="profile-current">
           <b>当前使用</b>
-          {active ? <><Tag color="blue">{active.name}</Tag><span className="muted">{active.model}</span></> : <span className="muted">尚未保存配置</span>}
+          {active ? <span className="muted">{active.model}</span> : <span className="muted">尚未保存配置</span>}
         </div>
         <div className="profile-controls">
           <Select

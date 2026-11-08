@@ -85,7 +85,7 @@ authRouter.post('/login', (req, res) => {
   } else {
     u = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
     if (!u) {
-      const matches = db.prepare("SELECT * FROM users WHERE name = ? AND role = 'user'").all(username) as UserRow[];
+      const matches = db.prepare('SELECT * FROM users WHERE name = ?').all(username) as UserRow[];
       if (matches.length > 1) return res.status(400).json({ error: '存在同名用户，请使用工号或用户名登录' });
       u = matches[0];
     }

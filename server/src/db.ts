@@ -57,6 +57,21 @@ CREATE TABLE IF NOT EXISTS sessions (
   sess TEXT NOT NULL,
   expires INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS progress_roster (
+  username TEXT PRIMARY KEY COLLATE NOCASE,
+  name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS progress_requirements (
+  username TEXT NOT NULL COLLATE NOCASE REFERENCES progress_roster(username) ON DELETE CASCADE,
+  course_name TEXT NOT NULL,
+  course_group TEXT NOT NULL DEFAULT '',
+  in_plan INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (username, course_name)
+);
+CREATE TABLE IF NOT EXISTS course_group_leaders (
+  course_group TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -172,10 +187,16 @@ const userColumns = db.prepare('PRAGMA table_info(users)').all() as { name: stri
 if (!userColumns.some((column) => column.name === 'roster_login')) {
   db.exec('ALTER TABLE users ADD COLUMN roster_login INTEGER NOT NULL DEFAULT 0');
 }
+if (!userColumns.some((column) => column.name === 'college_role')) {
+  db.exec("ALTER TABLE users ADD COLUMN college_role TEXT NOT NULL DEFAULT 'none'");
+}
 
 const submissionColumns = db.prepare('PRAGMA table_info(submissions)').all() as { name: string }[];
 if (!submissionColumns.some((column) => column.name === 'confirmed_at')) {
   db.exec('ALTER TABLE submissions ADD COLUMN confirmed_at TEXT');
+}
+if (!submissionColumns.some((column) => column.name === 'confirmed_by')) {
+  db.exec("ALTER TABLE submissions ADD COLUMN confirmed_by TEXT NOT NULL DEFAULT ''");
 }
 
 /** 首次启动写入初始检查清单 */

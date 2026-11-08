@@ -49,9 +49,9 @@ export default function SubmissionDetail() {
   const confirm = async () => {
     setConfirming(true);
     try {
-      const { confirmedAt } = await api.post<{ confirmedAt: string }>(`/api/submissions/${s.id}/confirm`);
-      setData((prev) => prev && { ...prev, submission: { ...prev.submission, confirmed_at: confirmedAt } });
-      message.success('检查结果已确认上传');
+      await api.post(`/api/submissions/${s.id}/confirm`);
+      await load();
+      message.success('已最终确认，管理员端与个人总览已同步');
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -75,7 +75,7 @@ export default function SubmissionDetail() {
         className="no-print"
         style={{ marginBottom: 12 }}
         items={[
-          isOther ? { title: <Link to="/admin/records?tab=submissions">文件与检查记录</Link> } : { title: <Link to="/submissions">上传记录</Link> },
+          isOther ? { title: <Link to={user?.role === 'admin' ? '/admin/records?tab=submissions' : '/supervision'}>监督记录</Link> } : { title: <Link to="/submissions">上传记录</Link> },
           { title: isOther ? s.course.name : <Link to={`/courses/${s.course_id}`}>{s.course.name}</Link> },
           { title: `第${s.seq}次检查` },
         ]}
@@ -90,16 +90,17 @@ export default function SubmissionDetail() {
       </div>
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Collapse className="no-print" items={[{ key: 'meta', label: '查看课程与上传信息', children: <SubmissionMeta sub={s} /> }]} />
+        <Collapse className="no-print" items={[{ key: 'original', label: '在线查看大纲原文（提取文本）', children: <><p className="muted small">以下为上传文件提取的原文，原始排版请下载原文件查看。</p><div className="prose">{s.extracted_text}</div></> }]} />
         {s.status === 'done' && (
           <Alert
             className="no-print"
             type={s.confirmed_at ? 'success' : 'info'}
             showIcon
             title={s.confirmed_at ? '检查结果已确认上传' : '检查已完成，结果尚未确认上传'}
-            description={s.confirmed_at ? `确认时间：${s.confirmed_at}` : isOther ? '等待上传者查看结果并确认上传。' : '请先查看下方检查结果。确认后保存本次结果及确认时间，不会改变检查结论。'}
-            action={!isOther && !s.confirmed_at && (
-              <Popconfirm title="确认上传本次检查结果？" description="将按当前检查结论保存确认状态。" okText="确认上传" onConfirm={confirm} okButtonProps={{ loading: confirming }}>
-                <Button type="primary" icon={<CheckOutlined />} loading={confirming}>确认上传结果</Button>
+            description={s.confirmed_at ? `确认时间：${s.confirmed_at}${s.confirmed_by ? `；${s.confirmed_by}` : ''}` : s.canConfirm ? '查看结果后可直接最终确认，确认状态同步到管理员与个人总览；组长确认后无需教师再次确认。' : '等待上传者或本课程组长最终确认。'}
+            action={s.canConfirm && !s.confirmed_at && (
+              <Popconfirm title="最终确认本次检查结果？" description="直接保存最终确认状态，不改变检查结论。" okText="最终确认" onConfirm={confirm} okButtonProps={{ loading: confirming }}>
+                <Button type="primary" icon={<CheckOutlined />} loading={confirming}>{isOther ? '组长最终确认' : '确认上传结果'}</Button>
               </Popconfirm>
             )}
           />
@@ -126,7 +127,7 @@ export default function SubmissionDetail() {
               title="本次检查未能完成"
               description={<>原因：{s.error || '未知错误'}。上传的文件已保存，可直接重新检查；如多次失败，请联系管理员检查 AI 配置。</>}
               action={
-                <Button icon={<ReloadOutlined />} onClick={recheck}>
+                (!isOther || user?.role === 'admin') && <Button icon={<ReloadOutlined />} onClick={recheck}>
                   重新检查
                 </Button>
               }

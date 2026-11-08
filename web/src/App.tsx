@@ -11,6 +11,8 @@ import CourseDetail from './pages/user/CourseDetail';
 import SubmissionDetail from './pages/user/SubmissionDetail';
 import Submissions from './pages/user/Submissions';
 import Profile from './pages/user/Profile';
+import Overview from './pages/user/Overview';
+import Supervision from './pages/user/Supervision';
 import Dashboard from './pages/admin/Dashboard';
 import Users from './pages/admin/Users';
 import Records from './pages/admin/Records';
@@ -48,7 +50,9 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<Navigate to="/courses" replace />} />
+        <Route index element={<Navigate to="/overview" replace />} />
+        <Route path="overview" element={<Overview />} />
+        <Route path="supervision" element={<Supervision />} />
         <Route path="upload" element={<Upload />} />
         <Route path="courses" element={<Courses />} />
         <Route path="courses/:id" element={<CourseDetail />} />
