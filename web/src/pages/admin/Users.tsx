@@ -28,6 +28,10 @@ export default function Users() {
   const [resetting, setResetting] = useState<Row | null>(null);
   const [granting, setGranting] = useState<Row | null>(null);
   const [grantingBusy, setGrantingBusy] = useState(false);
+  const [leader, setLeader] = useState<Row | null>(null);
+  const [leaderGroups, setLeaderGroups] = useState<string[]>([]);
+  const [groupOptions, setGroupOptions] = useState<{ value: string; label: string }[]>([]);
+  const [leaderBusy, setLeaderBusy] = useState(false);
   const [quotaForm] = Form.useForm();
   const [createForm] = Form.useForm();
   const [pwForm] = Form.useForm();
@@ -54,6 +58,38 @@ export default function Users() {
     }
   };
   const update = (u: Row, patch: Partial<User>, ok: string) => act(() => api.put(`/api/admin/users/${u.id}`, patch), ok);
+
+  const editLeader = async (u: Row) => {
+    try {
+      const roles = await api.get<{
+        groups: { group: string; userId: number | null }[];
+        users: Pick<User, 'id' | 'name' | 'username'>[];
+      }>('/api/admin/supervision-roles');
+      setGroupOptions(roles.groups.map((g) => {
+        const current = roles.users.find((person) => person.id === g.userId);
+        return { value: g.group, label: `${g.group}${current && current.id !== u.id ? `（现任：${current.name} / ${current.username}）` : ''}` };
+      }));
+      setLeaderGroups(roles.groups.filter((g) => g.userId === u.id).map((g) => g.group));
+      setLeader(u);
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
+
+  const saveLeader = async () => {
+    setLeaderBusy(true);
+    try {
+      await api.put(`/api/admin/users/${leader!.id}`, { led_groups: leaderGroups });
+      message.success('课程组长权限已保存');
+      setLeader(null);
+      await load();
+      await refresh();
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setLeaderBusy(false);
+    }
+  };
 
   const create = async () => {
     const v = await createForm.validateFields();
@@ -111,7 +147,7 @@ export default function Users() {
           <div className="sub">管理账号、导入教工名单和增加今日检查次数。展开用户可查看注册及登录信息。</div>
         </div>
         <Space wrap>
-          <SupervisionRoles />
+          <SupervisionRoles onChange={load} />
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入教工名单</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
             新建账号
@@ -160,7 +196,26 @@ export default function Users() {
             { title: '用户', width: 210, render: (_, r) => <div><strong className="user-name" title={r.name}>{r.name}{r.id === me?.id && <Tag style={{ marginLeft: 8 }}>我</Tag>}</strong><div className="muted small">{r.username}</div></div> },
             { title: '部门', dataIndex: 'department', width: 120, render: (v) => v || '—' },
             { title: '账号状态', width: 140, render: (_, r) => <Space size={4} wrap>{r.role === 'admin' && <Tag color="blue">管理员</Tag>}<UserStatusTag status={r.status} /></Space> },
-            { title: '监督身份', width: 160, render: (_, r) => <Select value={r.college_role} style={{ width: '100%' }} aria-label={`${r.name}的监督身份`} onChange={(college_role) => update(r, { college_role }, '监督身份已更新')} options={[{ value: 'none', label: '普通教师' }, { value: 'teaching', label: '教学条线（全院）' }, { value: 'program', label: '专业负责人（全院）' }]} /> },
+            {
+              title: '监督身份', width: 200, render: (_, r) => <div>
+                <Select<User['college_role'] | 'group_leader'>
+                  value={r.college_role === 'none' && r.led_groups.length ? 'group_leader' : r.college_role}
+                  style={{ width: '100%' }}
+                  aria-label={`${r.name}的监督身份`}
+                  onSelect={(identity) => identity === 'group_leader'
+                    ? editLeader(r)
+                    : update(r, identity === 'none' ? { college_role: identity, led_groups: [] } : { college_role: identity }, '监督身份已更新')}
+                  options={[
+                    { value: 'none', label: '普通教师' },
+                    { value: 'teaching', label: '教学条线（全院）' },
+                    { value: 'program', label: '专业负责人（全院）' },
+                    { value: 'group_leader', label: '课程组长' },
+                  ]}
+                />
+                {r.led_groups.map((group) => <div key={group} className="muted small">课程组长：{group}</div>)}
+                {r.led_groups.length > 0 && <Button type="link" size="small" style={{ padding: 0 }} onClick={() => editLeader(r)}>设置课程组</Button>}
+              </div>,
+            },
             {
               title: '课程 / 检查',
               width: 110,
@@ -232,6 +287,25 @@ export default function Users() {
           ]}
         />
       </Card>
+
+      <Modal
+        title={`设置课程组长：${leader?.name ?? ''}（${leader?.username ?? ''}）`}
+        open={!!leader}
+        onOk={saveLeader}
+        onCancel={() => setLeader(null)}
+        okText="保存课程组长"
+        confirmLoading={leaderBusy}
+        cancelButtonProps={{ disabled: leaderBusy }}
+        closable={!leaderBusy}
+        maskClosable={!leaderBusy}
+        destroyOnHidden
+      >
+        <Alert type="info" showIcon title="课程组长可与教学条线、专业负责人兼任"
+          description="保存仅修改负责课程组，不改变全院监督身份。每组仅一位组长，选择已有组长的组将替换原负责人。清空后保存可取消课程组长身份。" style={{ marginBottom: 16 }} />
+        <Select mode="multiple" allowClear showSearch optionFilterProp="label" style={{ width: '100%' }}
+          aria-label="负责课程组" placeholder="请选择负责的课程组" options={groupOptions}
+          value={leaderGroups} onChange={setLeaderGroups} disabled={leaderBusy} />
+      </Modal>
 
       <Modal
         title={`增加今日检查次数：${granting?.name ?? ''}`}

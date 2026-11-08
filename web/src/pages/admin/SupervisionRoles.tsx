@@ -8,7 +8,7 @@ interface Config {
   college: { name: string; role: string }[];
 }
 
-export default function SupervisionRoles() {
+export default function SupervisionRoles({ onChange }: { onChange: () => Promise<void> }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<Config | null>(null);
@@ -24,6 +24,7 @@ export default function SupervisionRoles() {
       const result = await api.post<{ matched: number; missing: string[] }>('/api/admin/supervision-roles/apply-presets');
       setNotice(`已绑定 ${result.matched} 人。${result.missing.length ? `尚未建号：${result.missing.join('、')}；创建账号后请再次匹配或手动设置。` : '指定人员均已匹配。'}`);
       await load();
+      await onChange();
     } catch (e) { message.error((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -33,6 +34,7 @@ export default function SupervisionRoles() {
       await api.put('/api/admin/supervision-roles/groups', { groups: data!.groups.map(({ group, userId }) => ({ group, userId })) });
       message.success('课程组长权限已保存');
       setOpen(false);
+      await onChange();
     } catch (e) { message.error((e as Error).message); }
     finally { setBusy(false); }
   };

@@ -176,7 +176,11 @@ adminRouter.get('/users', (req, res) => {
        FROM users u WHERE ${w} ORDER BY (u.status = 'pending') DESC, u.id DESC LIMIT ? OFFSET ?`,
     )
     .all(...args, pageSize, offset);
-  res.json({ total, rows: (rows as { id: number }[]).map((user) => ({ ...user, checkQuota: getCheckQuota(user.id) })) });
+  res.json({ total, rows: (rows as { id: number }[]).map((user) => ({
+    ...user,
+    led_groups: (db.prepare('SELECT course_group FROM course_group_leaders WHERE user_id = ? ORDER BY course_group').all(user.id) as { course_group: string }[]).map((g) => g.course_group),
+    checkQuota: getCheckQuota(user.id),
+  })) });
 });
 
 adminRouter.post('/users', (req, res) => {
@@ -231,9 +235,13 @@ adminRouter.put('/users/:id', (req, res) => {
       department: z.string().trim().max(100).optional(),
       role: z.enum(['admin', 'user']).optional(),
       college_role: z.enum(['none', 'teaching', 'program']).optional(),
+      led_groups: z.array(z.string()).max(8).optional(),
       status: z.enum(['active', 'disabled', 'pending']).optional(),
     })
     .parse(req.body);
+  if (body.led_groups && (new Set(body.led_groups).size !== body.led_groups.length || body.led_groups.some((group) => !GROUP_PRESETS.some((p) => p.group === group)))) {
+    return res.status(400).json({ error: '请选择八个正式课程组，课程组不能重复' });
+  }
   const next = { ...u, ...body };
   if (next.role === 'admin' && !u.password_hash) {
     return res.status(400).json({ error: '该教工账号尚未激活，请先重置密码再设为管理员；管理员必须使用密码登录' });
@@ -244,14 +252,23 @@ adminRouter.put('/users/:id', (req, res) => {
   if (u.role === 'admin' && u.status === 'active' && (next.role !== 'admin' || next.status !== 'active') && activeAdmins() <= 1) {
     return res.status(400).json({ error: '系统至少需要保留一个可用的管理员账号' });
   }
-  db.prepare('UPDATE users SET name = ?, department = ?, role = ?, status = ?, college_role = ? WHERE id = ?').run(next.name, next.department, next.role, next.status, next.college_role, id);
-  if (next.status !== 'active') db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(id);
   const changes = [
     body.status && body.status !== u.status ? `状态：${u.status}→${body.status}` : '',
     body.role && body.role !== u.role ? `角色：${u.role}→${body.role}` : '',
     body.college_role && body.college_role !== u.college_role ? `监督身份：${u.college_role}→${body.college_role}` : '',
+    body.led_groups ? `负责课程组：${body.led_groups.join('、') || '无'}` : '',
   ].filter(Boolean);
-  audit(req.user, u.status === 'pending' && body.status === 'active' ? '审核通过' : '修改账号', u.username, changes.join('；'), req.ip);
+  db.transaction(() => {
+    db.prepare('UPDATE users SET name = ?, department = ?, role = ?, status = ?, college_role = ? WHERE id = ?').run(next.name, next.department, next.role, next.status, next.college_role, id);
+    if (body.led_groups) {
+      db.prepare('DELETE FROM course_group_leaders WHERE user_id = ?').run(id);
+      for (const group of body.led_groups) {
+        db.prepare('INSERT INTO course_group_leaders (course_group, user_id) VALUES (?, ?) ON CONFLICT(course_group) DO UPDATE SET user_id = excluded.user_id').run(group, id);
+      }
+    }
+    if (next.status !== 'active') db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(id);
+    audit(req.user, u.status === 'pending' && body.status === 'active' ? '审核通过' : '修改账号', u.username, changes.join('；'), req.ip);
+  })();
   res.json({ user: toPublic(db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow) });
 });
 

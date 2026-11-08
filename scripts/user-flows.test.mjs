@@ -360,6 +360,42 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await teacher('/api/options')).data.checklist.name, 'Updated checklist');
   });
 
+  await t.test('user supervision dropdown assignments preserve dual identities and update role filters', async () => {
+    const settings = (await admin('/api/admin/supervision-roles')).data;
+    const groups = settings.groups.slice(0, 2).map((g) => g.group);
+    const first = (await admin('/api/admin/users', { username: 'dropdown-first', name: 'Dropdown First', password: 'dropdown12345' })).data.id;
+    const second = (await admin('/api/admin/users', { username: 'dropdown-second', name: 'Dropdown Second', password: 'dropdown12345' })).data.id;
+    const assigned = await admin(`/api/admin/users/${first}`, { college_role: 'program', led_groups: groups }, 'PUT');
+    assert.equal(assigned.status, 200);
+    assert.equal(assigned.data.user.role, 'user');
+    assert.equal(assigned.data.user.college_role, 'program');
+    assert.deepEqual(assigned.data.user.led_groups, [...groups].sort());
+    assert.deepEqual((await admin('/api/admin/users?q=dropdown-first')).data.rows[0].led_groups, [...groups].sort());
+    for (const role of ['program', 'group_leader']) {
+      const result = (await admin(`/api/admin/users?q=dropdown-&role=${role}`)).data;
+      assert.equal(result.total, 1);
+      assert.equal(result.rows[0].id, first);
+    }
+    assert.equal((await admin('/api/admin/users?q=dropdown-first&role=user')).data.total, 0);
+    for (const led_groups of [['未知组'], [groups[0], groups[0]]]) {
+      assert.equal((await admin(`/api/admin/users/${first}`, { college_role: 'none', led_groups }, 'PUT')).status, 400);
+    }
+    const regular = client();
+    await regular('/api/auth/login', { username: 'dropdown-second', password: 'dropdown12345' });
+    assert.equal((await regular(`/api/admin/users/${second}`, { led_groups: groups }, 'PUT')).status, 403);
+    const transferred = await admin(`/api/admin/users/${second}`, { led_groups: [groups[0]] }, 'PUT');
+    assert.equal(transferred.status, 200);
+    const firstRow = (await admin('/api/admin/users?q=dropdown-first')).data.rows[0];
+    assert.equal(firstRow.college_role, 'program');
+    assert.deepEqual(firstRow.led_groups, [groups[1]]);
+    assert.equal((await admin('/api/admin/users?q=dropdown-&role=group_leader')).data.total, 2);
+    assert.equal((await admin(`/api/admin/users/${first}`, { led_groups: [] }, 'PUT')).data.user.college_role, 'program');
+    const cleared = await admin(`/api/admin/users/${second}`, { college_role: 'none', led_groups: [] }, 'PUT');
+    assert.deepEqual(cleared.data.user.led_groups, []);
+    assert.equal((await admin('/api/admin/users?q=dropdown-&role=group_leader')).data.total, 0);
+    assert.equal((await admin('/api/admin/users?q=dropdown-second&role=user')).data.total, 1);
+  });
+
   await t.test('weekly course requirements, all-course passes and private personal progress', async (scopeTest) => {
     const empty = await admin('/api/admin/progress');
     assert.equal(empty.status, 200);
