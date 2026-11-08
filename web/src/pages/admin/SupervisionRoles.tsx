@@ -42,7 +42,7 @@ export default function SupervisionRoles({ onChange }: { onChange: () => Promise
     <Button onClick={() => { setOpen(true); setNotice(''); load(); }}>监督权限设置</Button>
     <Modal title="教学条线、专业负责人及八个课程组长" open={open} onCancel={() => setOpen(false)} onOk={save} okText="保存课程组长" confirmLoading={busy} okButtonProps={{ disabled: !data }} cancelButtonProps={{ disabled: busy }} closable={!busy} maskClosable={!busy}>
       <Alert type="info" showIcon title="监督身份独立于系统管理员，可兼任。"
-        description="教学条线、专业负责人查看全院；组长仅查看并最终确认本组磨课清单内课程。不会授予账号管理或 AI 配置权限。所有权限绑定账号工号，不会在注册时凭姓名自动授权。" style={{ marginBottom: 16 }} />
+        description="教学条线查看全院；专业负责人查看配置的审核专业；组长查看并最终确认本组云文档清单内课程。专业范围和执笔人请到“视图与大纲配置”设置，不读取磨课安排。不会授予账号管理或 AI 配置权限。" style={{ marginBottom: 16 }} />
       {data && <>
         <p>教学条线：{data.college.filter((p) => p.role === 'teaching').map((p) => p.name).join('、')}。</p>
         <p>专业负责人：{data.college.filter((p) => p.role === 'program').map((p) => p.name).join('、')}。</p>

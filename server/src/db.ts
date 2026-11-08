@@ -72,6 +72,23 @@ CREATE TABLE IF NOT EXISTS course_group_leaders (
   course_group TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS program_leader_scopes (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  professional TEXT NOT NULL,
+  PRIMARY KEY (user_id, professional)
+);
+CREATE TABLE IF NOT EXISTS outline_requirements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_key TEXT NOT NULL UNIQUE,
+  course_name TEXT NOT NULL,
+  course_group TEXT NOT NULL DEFAULT '',
+  professional TEXT NOT NULL DEFAULT '',
+  teacher_names TEXT NOT NULL DEFAULT '',
+  writer_name TEXT NOT NULL DEFAULT '',
+  writer_identifier TEXT NOT NULL DEFAULT '',
+  writer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  writer_manual INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -189,6 +206,17 @@ if (!userColumns.some((column) => column.name === 'roster_login')) {
 }
 if (!userColumns.some((column) => column.name === 'college_role')) {
   db.exec("ALTER TABLE users ADD COLUMN college_role TEXT NOT NULL DEFAULT 'none'");
+}
+if (!userColumns.some((column) => column.name === 'must_change_password')) {
+  db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+}
+if (!userColumns.some((column) => column.name === 'supervision_manager')) {
+  db.exec('ALTER TABLE users ADD COLUMN supervision_manager INTEGER NOT NULL DEFAULT 0');
+}
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'supervision_manager_initialized'").get()) {
+  const tang = db.prepare("SELECT id FROM users WHERE name = '汤家华'").all() as { id: number }[];
+  if (tang.length === 1) db.prepare("UPDATE users SET supervision_manager = 1, college_role = CASE WHEN college_role='none' THEN 'teaching' ELSE college_role END WHERE id = ?").run(tang[0].id);
+  db.prepare("INSERT INTO settings (key, value) VALUES ('supervision_manager_initialized', '1')").run();
 }
 
 const submissionColumns = db.prepare('PRAGMA table_info(submissions)').all() as { name: string }[];

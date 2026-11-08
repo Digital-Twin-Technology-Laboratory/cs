@@ -128,19 +128,20 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await admin(`/api/admin/users/${duplicate.data.id}`, undefined, 'DELETE')).status, 200);
   });
 
-  await t.test('activation requires ID and name once; password changes work for ID and unique name login', async () => {
+  await t.test('initial passwords require a change; password login accepts ID and unique name', async () => {
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001' })).status, 400);
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001', name: 'Wrong Name' })).status, 400);
-    const first = await teacher('/api/auth/login', { username: 'teacher001', name: '测试教师' });
+    const first = await teacher('/api/auth/login', { username: 'teacher001', password: '12345678' });
     assert.equal(first.status, 200);
-    assert.equal(first.data.initialPassword, '12345678');
+    assert.equal(first.data.user.must_change_password, 1);
+    assert.equal((await teacher('/api/options')).status, 403);
     assert.equal((await teacher('/api/auth/password', { oldPassword: '12345678', newPassword: 'changed12345' }, 'PUT')).status, 200);
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001', name: '测试教师' })).status, 400);
     await teacher('/api/auth/logout', {});
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001', password: '12345678' })).status, 400);
     const byId = await teacher('/api/auth/login', { username: 'teacher001', password: 'changed12345' });
     assert.equal(byId.status, 200);
-    assert.equal(byId.data.initialPassword, undefined);
+    assert.equal(byId.data.user.must_change_password, 0);
     await teacher('/api/auth/logout', {});
     assert.equal((await teacher('/api/auth/login', { username: '测试教师', password: 'changed12345' })).status, 200);
     const duplicate = await client()('/api/auth/login', { username: '同名教师', password: '12345678' });
@@ -150,13 +151,17 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await admin(`/api/admin/users/${resetId}/reset-password`, { password: 'reset12345' })).status, 200);
     const resetUser = client();
     assert.equal((await resetUser('/api/auth/login', { username: 'teacher005', name: '重置教师' })).status, 400);
-    assert.equal((await resetUser('/api/auth/login', { username: 'teacher005', password: 'reset12345' })).status, 200);
+    const resetLogin = await resetUser('/api/auth/login', { username: 'teacher005', password: 'reset12345' });
+    assert.equal(resetLogin.status, 200);
+    assert.equal(resetLogin.data.user.must_change_password, 1);
+    assert.equal((await resetUser('/api/auth/password', { oldPassword: 'reset12345', newPassword: 'reset-changed12345' }, 'PUT')).status, 200);
   });
 
   await t.test('old passwordless sessions no longer authorize requests', async () => {
     const legacy = client();
-    const first = await legacy('/api/auth/login', { username: 'teacher004', name: '旧版教师' });
+    const first = await legacy('/api/auth/login', { username: 'teacher004', password: '12345678' });
     assert.equal(first.status, 200);
+    assert.equal((await legacy('/api/auth/password', { oldPassword: '12345678', newPassword: 'legacy12345' }, 'PUT')).status, 200);
     database.prepare("UPDATE sessions SET sess = json_set(sess, '$.passwordless', json('true')) WHERE json_extract(sess, '$.userId') = ?").run(first.data.user.id);
     assert.equal((await legacy('/api/options')).status, 401);
     assert.equal((await legacy('/api/auth/me')).data.user, null);
@@ -217,6 +222,7 @@ test('account activation, daily check quota and checklist download', { timeout: 
     const retry = client();
     const login = await retry('/api/auth/login', { username: 'retryuser', password: 'retry12345' });
     const retryId = login.data.user.id;
+    assert.equal((await retry('/api/auth/password', { oldPassword: 'retry12345', newPassword: 'retry-changed12345' }, 'PUT')).status, 200);
     assert.equal((await retry('/api/submissions', uploadForm(Buffer.from('broken docx')))).status, 400);
     assert.equal(database.prepare('SELECT COUNT(*) AS n FROM courses WHERE user_id = ?').get(retryId).n, 0);
     failAi = true;
@@ -381,7 +387,8 @@ test('account activation, daily check quota and checklist download', { timeout: 
       assert.equal((await admin(`/api/admin/users/${first}`, { college_role: 'none', led_groups }, 'PUT')).status, 400);
     }
     const regular = client();
-    await regular('/api/auth/login', { username: 'dropdown-second', password: 'dropdown12345' });
+    assert.equal((await regular('/api/auth/login', { username: 'dropdown-second', password: 'dropdown12345' })).status, 200);
+    assert.equal((await regular('/api/auth/password', { oldPassword: 'dropdown12345', newPassword: 'dropdown-changed12345' }, 'PUT')).status, 200);
     assert.equal((await regular(`/api/admin/users/${second}`, { led_groups: groups }, 'PUT')).status, 403);
     const transferred = await admin(`/api/admin/users/${second}`, { led_groups: [groups[0]] }, 'PUT');
     assert.equal(transferred.status, 200);
@@ -396,202 +403,4 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await admin('/api/admin/users?q=dropdown-second&role=user')).data.total, 1);
   });
 
-  await t.test('weekly course requirements, all-course passes and private personal progress', async (scopeTest) => {
-    const empty = await admin('/api/admin/progress');
-    assert.equal(empty.status, 200);
-    assert.equal(empty.data.roster, null);
-    assert.equal(empty.data.summary.total, 0);
-    assert.equal(empty.data.summary.requiredOutlines, 0);
-    assert.equal((await client()('/api/admin/progress')).status, 401);
-    assert.equal((await teacher('/api/admin/progress')).status, 403);
-    assert.equal((await teacher('/api/admin/progress/import', {})).status, 403);
-
-    assert.equal((await client()('/api/progress')).status, 401);
-    const accounts = new FormData();
-    accounts.append('file', new Blob(['姓名,工号\n同名统计教师,0007\n另一教师,progress002\n上传失败教师,progress003\n未上传教师,progress004\n名单外教师,progress-outside']), 'accounts.csv');
-    assert.equal((await admin('/api/admin/users/import', accounts)).data.imported, 5);
-    const ids = Object.fromEntries(database.prepare("SELECT username, id FROM users WHERE username = '0007' OR username LIKE 'progress%'").all().map((r) => [r.username, r.id]));
-    const passCourse = seedCourse(ids['0007'], '课程A');
-    seedSubmission(passCourse, ids['0007'], 'done', today.now, 'passed');
-    seedSubmission(passCourse, ids['0007'], 'done', today.now, 'passed');
-    seedSubmission(passCourse, ids['0007'], 'done', today.now, 'failed');
-    const secondCourse = seedCourse(ids['0007'], '课程B');
-    seedSubmission(secondCourse, ids['0007'], 'done', today.now, 'passed');
-    const confirmCourse = seedCourse(ids.progress002, '课程A');
-    const confirmId = seedSubmission(confirmCourse, ids.progress002, 'done', today.now, 'failed');
-    database.prepare('UPDATE submissions SET result_json = ? WHERE id = ?').run(JSON.stringify({ summary: 'Not passed', itemResults: [], issues: [], toVerify: [] }), confirmId);
-    seedSubmission(seedCourse(ids.progress003, '课程Z'), ids.progress003, 'failed', today.now);
-    const outsideId = seedSubmission(seedCourse(ids['progress-outside']), ids['progress-outside'], 'done', today.now, 'passed');
-    database.prepare('UPDATE submissions SET confirmed_at = ? WHERE id = ?').run(today.now, outsideId);
-
-    async function workbook(sheets) {
-      const zip = new JSZip();
-      const escape = (v) => String(v).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-      zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>');
-      zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
-      zip.file('xl/workbook.xml', `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((_, i) => `<sheet name="Sheet${i + 1}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`);
-      zip.file('xl/_rels/workbook.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}</Relationships>`);
-      sheets.forEach((rows, i) => zip.file(`xl/worksheets/sheet${i + 1}.xml`, `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows.map((row, r) => `<row r="${r + 1}">${row.map((value, c) => `<c r="${String.fromCharCode(65 + c)}${r + 1}" t="inlineStr"><is><t>${escape(value)}</t></is></c>`).join('')}</row>`).join('')}</sheetData></worksheet>`));
-      return zip.generateAsync({ type: 'nodebuffer' });
-    }
-    const header = ['星期几', '课程名称', '姓名', '教工号', '课程组'];
-    const timetable = await workbook([[header,
-      ['一', '课程A', '同名统计教师', '0007', '组一'], ['四', '课程A', '同名统计教师', '0007', '组一'],
-      ['六', '课程B', '同名统计教师', '0007', '组二'], ['一', '课程A', '另一教师', 'PROGRESS002', '组一'],
-      ['二', '课程Z', '上传失败教师', 'progress003', '组三'], ['三', '课程N', '未上传教师', 'progress004', '组三'],
-      ['日', '课程Missing', '尚未注册教师', '0009', '组三'], ['四', '课程B', '同名统计教师、另一教师', '0007、progress002', '组二'],
-    ]]);
-    const plan = await workbook([[['汇总封面']], [['标题'], ['授课教师', '课程名称', '本场指导老师'],
-      ['同名统计教师', '课程A', '仅指导教师'], ['同名统计教师', '课程A', '仅指导教师'],
-      ['同名统计教师、另一教师', '课程B', '仅指导教师'], ['不在课表中的人', '未知课程', '仅指导教师'],
-    ]]);
-    async function importProgress(buffer = timetable, planBuffer = plan) {
-      const form = new FormData();
-      form.append('timetable', new Blob([buffer]), 'timetable.xlsx');
-      form.append('plan', new Blob([planBuffer]), 'plan.xlsx');
-      return admin('/api/admin/progress/import', form);
-    }
-    const before = database.prepare('SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM submissions) AS submissions').get();
-    const imported = await importProgress();
-    assert.equal(imported.status, 200);
-    assert.equal(imported.data.people, 5);
-    assert.equal(imported.data.required, 7);
-    assert.equal(imported.data.mergedRows, 2);
-    assert.equal(imported.data.warnings.length, 1);
-    assert.deepEqual(database.prepare('SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM submissions) AS submissions').get(), before);
-    let progress = (await admin('/api/admin/progress')).data;
-    assert.deepEqual(progress.summary, { total: 5, uploaded: 3, passed: 0, confirmed: 0, requiredOutlines: 7, uploadedOutlines: 4, passedOutlines: 1, confirmedOutlines: 0 });
-    assert.equal(progress.rows.find((r) => r.username === '0007').required_count, 2);
-    assert.equal(progress.rows.find((r) => r.username === '0009').user_id, null);
-    assert.equal(progress.rows.some((r) => r.username === 'progress-outside'), false);
-    assert.equal(progress.roster.planPairs, 4);
-
-    const owner = client();
-    const confirmer = client();
-    assert.equal((await owner('/api/auth/login', { username: '0007', name: '同名统计教师' })).status, 200);
-    assert.equal((await confirmer('/api/auth/login', { username: 'progress002', name: '另一教师' })).status, 200);
-    const mine = (await owner('/api/progress')).data;
-    assert.equal(mine.required, 2);
-    assert.equal(mine.uploaded, 2);
-    assert.equal(mine.passed, 1);
-    assert.deepEqual((await owner(`/api/progress?userId=${ids.progress002}&username=PROGRESS002`)).data, mine);
-    assert.equal(mine.rows, undefined);
-    assert.equal((await owner('/api/admin/progress')).status, 403);
-    assert.equal((await owner(`/api/submissions/${confirmId}`)).status, 404);
-    assert.equal((await teacher('/api/progress')).data.required, 0);
-    assert.deepEqual((await owner('/api/options')).data.requiredCourses.map((c) => c.name), ['课程A', '课程B']);
-
-    assert.equal((await admin(`/api/submissions/${confirmId}/confirm`, {})).status, 403);
-    assert.equal((await confirmer(`/api/submissions/${confirmId}/confirm`, {})).status, 200);
-    assert.equal((await confirmer(`/api/submissions/${confirmId}/confirm`, {})).status, 200);
-    assert.equal((await confirmer('/api/progress')).data.confirmed, 1);
-    assert.equal((await confirmer('/api/progress')).data.passed, 0);
-    seedSubmission(passCourse, ids['0007'], 'done', today.now, 'passed');
-    assert.equal((await admin('/api/admin/progress')).data.summary.passed, 1);
-    const last = seedSubmission(seedCourse(ids['0007'], '课程A'), ids['0007'], 'done', today.now, 'failed');
-    assert.equal((await admin('/api/admin/progress')).data.summary.passed, 0);
-    assert.equal((await owner('/api/progress')).data.required, 2);
-    for (const status of ['queued', 'running', 'failed']) {
-      database.prepare("UPDATE submissions SET status = ?, verdict = NULL WHERE id = ?").run(status, last);
-      assert.equal((await admin('/api/admin/progress')).data.summary.passed, 0, status);
-    }
-    database.prepare("UPDATE submissions SET status = 'done', verdict = 'passed' WHERE id = ?").run(last);
-    assert.equal((await owner('/api/progress')).data.passed, 2);
-    seedSubmission(confirmCourse, ids.progress002, 'done', today.now, 'passed');
-    assert.equal((await confirmer('/api/progress')).data.confirmed, 0);
-    assert.equal((await confirmer('/api/progress')).data.passed, 1);
-    assert.equal((await admin('/api/admin/progress')).data.summary.passed, 1, 'Missing required course B prevents another all-course pass');
-
-    await scopeTest.test('supervision identities restrict reads, final confirmation and live revocation', async () => {
-      const aiGroup = 'AI基础及应用类课程组';
-      const codeGroup = '程序设计与计算机系统类课程组';
-      database.prepare('UPDATE progress_requirements SET course_group = ? WHERE course_group = ?').run(aiGroup, '组一');
-      database.prepare('UPDATE progress_requirements SET course_group = ? WHERE course_group = ?').run(codeGroup, '组二');
-      for (const [username, name] of [['scope-ai', '纪其进'], ['scope-code', '王辉'], ['scope-teaching', '汤家华'], ['scope-head', '刘正涛'], ['scope-wu', '吴爱平'], ['scope-xue', '薛亮'], ['scope-program', '龚兰兰']]) {
-        assert.equal((await admin('/api/admin/users', { username, name, password: 'scope12345' })).status, 200);
-      }
-      assert.equal((await owner('/api/admin/supervision-roles/apply-presets', {})).status, 403);
-      const assigned = await admin('/api/admin/supervision-roles/apply-presets', {});
-      assert.equal(assigned.status, 200);
-      assert.ok(assigned.data.missing.includes('柳宝华'));
-      const settings = (await admin('/api/admin/supervision-roles')).data;
-      assert.equal(settings.groups.length, 8);
-      const leaderId = settings.groups.find((g) => g.group === aiGroup).userId;
-      assert.ok(leaderId);
-      assert.equal((await admin('/api/admin/supervision-roles/groups', { groups: [{ group: '未知组', userId: leaderId }] }, 'PUT')).status, 400);
-      const leader = client(), otherLeader = client(), college = client(), head = client();
-      assert.equal((await leader('/api/auth/login', { username: '纪其进', password: 'scope12345' })).status, 200);
-      await otherLeader('/api/auth/login', { username: 'scope-code', password: 'scope12345' });
-      await college('/api/auth/login', { username: '汤家华', password: 'scope12345' });
-      await head('/api/auth/login', { username: '刘正涛', password: 'scope12345' });
-      assert.equal((await teacher('/api/supervision/progress')).status, 403);
-      const groupProgress = (await leader('/api/supervision/progress?group=组外&userId=999')).data;
-      assert.equal(groupProgress.college, false);
-      assert.equal(groupProgress.rows.length, 1);
-      assert.equal(groupProgress.rows[0].course_group, aiGroup);
-      assert.equal(groupProgress.rows[0].latest_id, last);
-      assert.equal((await otherLeader('/api/supervision/progress')).data.rows.length, 2);
-      assert.equal((await college('/api/supervision/progress')).data.rows.length, 7);
-      assert.equal((await head('/api/auth/me')).data.user.college_role, 'program');
-      assert.deepEqual((await head('/api/auth/me')).data.user.led_groups, ['导论与实践类课程组']);
-      assert.equal((await head('/api/supervision/progress')).data.rows.length, 7);
-      assert.equal((await college('/api/admin/users')).status, 403);
-      assert.equal((await college('/api/admin/ai')).status, 403);
-      assert.equal((await leader(`/api/submissions/${confirmId}`)).status, 404, 'Same group but not on the grinding list is outside leader scope');
-      assert.equal((await otherLeader(`/api/submissions/${last}`)).status, 404);
-      assert.equal((await otherLeader(`/api/submissions/${last}/file`)).status, 404);
-      assert.equal((await otherLeader(`/api/submissions/${last}/report.txt`)).status, 404);
-      assert.equal((await otherLeader(`/api/submissions/${last}/confirm`, {})).status, 404);
-      assert.equal((await college(`/api/submissions/${last}/confirm`, {})).status, 403);
-      assert.equal((await college(`/api/submissions/${last}/recheck`, {})).status, 403);
-      const old = database.prepare('SELECT MIN(id) AS id FROM submissions WHERE course_id = ?').get(passCourse).id;
-      assert.equal((await leader(`/api/submissions/${old}`)).data.submission.canConfirm, false);
-      assert.equal((await leader(`/api/submissions/${old}/confirm`, {})).status, 403);
-      database.prepare('UPDATE submissions SET result_json = ? WHERE id = ?').run(JSON.stringify({ summary: 'Reviewable', itemResults: [], issues: [], toVerify: [] }), last);
-      assert.equal((await leader(`/api/submissions/${last}`)).data.submission.canConfirm, true);
-      assert.equal((await college(`/api/submissions/${last}`)).data.submission.canConfirm, false);
-      assert.equal((await leader(`/api/submissions/${last}/confirm`, {})).status, 200);
-      const final = (await owner('/api/progress')).data;
-      assert.equal(final.confirmed, 1);
-      assert.match(final.courses.find((c) => c.latest_id === last).confirmed_by, /课程组长：纪其进/);
-      const confirmedAt = (await leader(`/api/submissions/${last}/confirm`, {})).data.confirmedAt;
-      assert.equal(confirmedAt, final.courses.find((c) => c.latest_id === last).confirmed_at);
-      assert.equal((await admin('/api/admin/progress')).data.summary.confirmedOutlines, 1);
-      assert.equal((await admin('/api/admin/supervision-roles/groups', { groups: [{ group: aiGroup, userId: null }] }, 'PUT')).status, 200);
-      assert.equal((await leader('/api/supervision/progress')).status, 403);
-      assert.equal((await leader(`/api/submissions/${last}`)).status, 404);
-      const collegeId = settings.users.find((u) => u.username === 'scope-teaching').id;
-      assert.equal((await admin(`/api/admin/users/${collegeId}`, { college_role: 'none' }, 'PUT')).status, 200);
-      assert.equal((await college('/api/supervision/progress')).status, 403);
-      assert.equal((await college(`/api/submissions/${last}`)).status, 404);
-    });
-
-    progress = (await admin('/api/admin/progress')).data;
-    for (const invalid of [Buffer.from('broken xlsx'), await workbook([[['姓名', '工号']]]), await workbook([[header]]), await workbook([[header, ['一', '课程', '张、李', '001', '组']]]), await workbook([[header, ['一', '课程', '张', '001', '组'], ['一', '课程', '李', '001', '组']]])]) {
-      assert.equal((await importProgress(invalid)).status, 400);
-      assert.deepEqual((await admin('/api/admin/progress')).data, progress);
-    }
-    assert.equal((await importProgress(timetable, Buffer.from('broken plan'))).status, 400);
-    assert.deepEqual((await admin('/api/admin/progress')).data, progress);
-    assert.equal((await admin('/api/admin/progress/import', {})).status, 400);
-    const duplicateAccounts = new FormData();
-    duplicateAccounts.append('file', new Blob(['姓名,工号\n测试,duplicate001\n测试,DUPLICATE001']), 'duplicate-accounts.csv');
-    assert.equal((await admin('/api/admin/users/import', duplicateAccounts)).status, 400);
-
-    const lateAccount = new FormData();
-    lateAccount.append('file', new Blob(['姓名,工号\n尚未注册教师,0009']), 'late-account.csv');
-    assert.equal((await admin('/api/admin/users/import', lateAccount)).data.imported, 1);
-    const lateId = database.prepare("SELECT id FROM users WHERE username = '0009'").get().id;
-    seedSubmission(seedCourse(lateId, '课程Missing'), lateId, 'done', today.now, 'passed');
-    assert.equal((await admin('/api/admin/progress')).data.summary.passed, 2);
-    assert.equal((await admin(`/api/admin/users/${lateId}`, undefined, 'DELETE')).status, 200);
-    assert.equal((await admin('/api/admin/progress')).data.summary.total, 5);
-    const replaced = await importProgress(await workbook([[header, ['一', '课程A', '同名统计教师', '0007', '组一']]]));
-    assert.equal(replaced.status, 200);
-    assert.equal((await admin('/api/admin/progress')).data.summary.requiredOutlines, 1);
-    assert.equal((await owner('/api/progress')).data.required, 1);
-    assert.equal((await confirmer('/api/progress')).data.required, 0);
-    assert.equal(database.prepare('SELECT COUNT(*) AS n FROM submissions WHERE user_id = ?').get(ids.progress002).n, 2);
-    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = '导入统计名单'").get().n, 2);
-  });
 });

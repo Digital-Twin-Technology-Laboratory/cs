@@ -66,51 +66,43 @@ authRouter.post('/register', (req, res) => {
 });
 
 authRouter.post('/login', (req, res) => {
-  const { username, password, name } = z
+  const { username, password } = z
     .object({
       username: z.string().trim().min(1, '请输入工号或姓名').max(50),
-      password: z.string().min(1, '请输入密码').max(64).optional(),
-      name: z.string().trim().min(1, '请输入姓名').max(50).optional(),
+      password: z.string().min(1, '请输入密码').max(64),
     })
-    .refine((body) => body.password !== undefined || !!body.name, '首次登录请同时填写工号和姓名；已激活账号请使用密码登录')
     .parse(req.body);
   const key = `${username.toLowerCase()}|${req.ip}`;
   const f = failures.get(key);
   if (f && f.until > Date.now()) return res.status(429).json({ error: '登录失败次数过多，请5分钟后再试' });
 
-  let u: UserRow | undefined;
-  if (password === undefined) {
-    u = db.prepare("SELECT * FROM users WHERE username = ? AND name = ? AND roster_login = 1 AND role = 'user'").get(username, name) as UserRow | undefined;
-    if (u?.password_hash) return res.status(400).json({ error: '账号已激活，请使用工号或姓名和密码登录' });
-  } else {
-    u = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
-    if (!u) {
-      const matches = db.prepare('SELECT * FROM users WHERE name = ?').all(username) as UserRow[];
-      if (matches.length > 1) return res.status(400).json({ error: '存在同名用户，请使用工号或用户名登录' });
-      u = matches[0];
-    }
-    if (u && !bcrypt.compareSync(password, u.password_hash)) u = undefined;
+  let u = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
+  if (!u) {
+    const matches = db.prepare('SELECT * FROM users WHERE name = ?').all(username) as UserRow[];
+    if (matches.length > 1) return res.status(400).json({ error: '存在同名用户，请使用工号或用户名登录' });
+    u = matches[0];
   }
+  if (u && !(u.password_hash ? bcrypt.compareSync(password, u.password_hash) : u.roster_login === 1 && password === INITIAL_PASSWORD)) u = undefined;
   if (!u) {
     const n = (f && f.until <= Date.now() && f.n >= 5 ? 0 : f?.n ?? 0) + 1;
     failures.set(key, { n, until: n >= 5 ? Date.now() + 5 * 60_000 : 0 });
-    return res.status(400).json({ error: password === undefined ? '工号与姓名不匹配，请核对信息或联系管理员导入名单' : '工号、姓名或密码错误' });
+    return res.status(400).json({ error: '工号、姓名或密码错误' });
   }
   failures.delete(key);
   if (u.status === 'pending') return res.status(403).json({ error: '账号正在等待管理员审核' });
   if (u.status === 'disabled') return res.status(403).json({ error: '账号已被停用，请联系管理员' });
 
+  if (!u.password_hash) {
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(bcrypt.hashSync(INITIAL_PASSWORD, 10), u.id);
+  } else if (u.roster_login === 1 && password === INITIAL_PASSWORD) {
+    db.prepare('UPDATE users SET must_change_password = 1 WHERE id = ?').run(u.id);
+  }
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: '登录失败' });
-    if (password === undefined) {
-      const activated = db.prepare("UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ''")
-        .run(bcrypt.hashSync(INITIAL_PASSWORD, 10), u.id);
-      if (!activated.changes) return res.status(400).json({ error: '账号已激活，请使用工号或姓名和密码登录' });
-    }
     req.session.userId = u.id;
     db.prepare("UPDATE users SET last_login_at = datetime('now','localtime') WHERE id = ?").run(u.id);
     audit(u, '登录', undefined, undefined, req.ip);
-    res.json({ user: toPublic(u), initialPassword: password === undefined ? INITIAL_PASSWORD : undefined });
+    res.json({ user: toPublic(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id) as UserRow) });
   });
 });
 
@@ -131,7 +123,8 @@ authRouter.put('/password', requireAuth, (req, res) => {
   const body = z.object({ oldPassword: z.string(), newPassword: passwordSchema }).parse(req.body);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserRow;
   if (!bcrypt.compareSync(body.oldPassword, u.password_hash)) return res.status(400).json({ error: '原密码不正确' });
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(body.newPassword, 10), u.id);
+  if (body.newPassword === body.oldPassword) return res.status(400).json({ error: '新密码不能与原密码相同' });
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0, roster_login = 0 WHERE id = ?').run(bcrypt.hashSync(body.newPassword, 10), u.id);
   audit(u, '修改密码', undefined, undefined, req.ip);
-  res.json({ ok: true });
+  res.json({ ok: true, user: toPublic(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id) as UserRow) });
 });

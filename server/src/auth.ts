@@ -19,12 +19,14 @@ export interface UserRow {
   department: string;
   role: 'admin' | 'user';
   college_role: 'none' | 'teaching' | 'program';
+  must_change_password: number;
+  supervision_manager: number;
   status: 'pending' | 'active' | 'disabled';
   created_at: string;
   last_login_at: string | null;
 }
 
-export type PublicUser = Omit<UserRow, 'password_hash'> & { led_groups: string[] };
+export type PublicUser = Omit<UserRow, 'password_hash'> & { led_groups: string[]; program_scopes: string[] };
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -39,7 +41,8 @@ export function toPublic(u: UserRow): PublicUser {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { password_hash, ...rest } = u;
   const groups = db.prepare('SELECT course_group FROM course_group_leaders WHERE user_id = ? ORDER BY course_group').all(u.id) as { course_group: string }[];
-  return { ...rest, led_groups: groups.map((g) => g.course_group) };
+  const programs = db.prepare('SELECT professional FROM program_leader_scopes WHERE user_id = ? ORDER BY professional').all(u.id) as { professional: string }[];
+  return { ...rest, led_groups: groups.map((g) => g.course_group), program_scopes: programs.map((p) => p.professional) };
 }
 
 /** 基于 SQLite 的会话存储 */
@@ -91,11 +94,15 @@ export function loadUser(req: Request, _res: Response, next: NextFunction) {
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: '请先登录' });
+  if (req.user.must_change_password && !(req.method === 'PUT' && req.originalUrl.split('?')[0] === '/api/auth/password')) {
+    return res.status(403).json({ error: '请先修改初始密码后再使用系统' });
+  }
   next();
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: '请先登录' });
+  if (req.user.must_change_password) return res.status(403).json({ error: '请先修改初始密码后再使用系统' });
   if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
   next();
 }

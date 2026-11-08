@@ -1,69 +1,159 @@
-import { Alert, App, Button, Card, Col, Input, Popconfirm, Row, Select, Space, Statistic } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api } from '../../api';
+import { Alert, App, Button, Card, Col, Input, Popconfirm, Row, Select, Space, Statistic, Tabs, Tag } from 'antd';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, qs } from '../../api';
 import { useAuth } from '../../auth';
 import Table from '../../components/ResponsiveTable';
 import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
-import type { RequiredCourseProgress } from '../../types';
+import type { SubStatus } from '../../types';
 
-type RowData = RequiredCourseProgress & { username: string; name: string; can_confirm: boolean };
-interface Data { college: boolean; groups: string[]; rows: RowData[] }
+export interface RequirementRow {
+  id: number;
+  source_key: string;
+  course_name: string;
+  course_group: string;
+  professional: string;
+  teacher_names: string;
+  writer_name: string;
+  username: string;
+  name: string;
+  user_id: number | null;
+  latest_id: number | null;
+  status: SubStatus | null;
+  verdict: 'passed' | 'failed' | null;
+  confirmed_at: string | null;
+  confirmed_by: string;
+  created_at: string | null;
+  can_confirm: boolean;
+}
+interface Data {
+  source: { name: string; importedAt: string } | null;
+  view: string;
+  views: string[];
+  groups: string[];
+  programs: string[];
+  rows: RequirementRow[];
+  summary: { people: number; required: number; uploaded: number; passed: number; confirmed: number; unassigned: number };
+}
+interface PersonRow { key: string; name: string; username: string; unmatched: boolean; courses: RequirementRow[] }
+const VIEW_NAMES: Record<string, string> = { college: '全院总览', group: '课程组总览', program: '专业总览' };
+const isPassed = (r: RequirementRow) => r.status === 'done' && r.verdict === 'passed';
+const isConfirmed = (r: RequirementRow) => r.status === 'done' && r.confirmed_at !== null;
 
-export default function Supervision() {
+export default function Supervision({ embedded = false }: { embedded?: boolean }) {
   const { user } = useAuth();
   const { message } = App.useApp();
+  const [params, setParams] = useSearchParams();
+  const view = params.get('view') ?? '';
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState('');
+  const [refresh, setRefresh] = useState(0);
   const [q, setQ] = useState('');
   const [group, setGroup] = useState('');
+  const [program, setProgram] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [confirming, setConfirming] = useState<number | null>(null);
-  const load = useCallback(async () => {
-    try { setData(await api.get<Data>('/api/supervision/progress')); setError(''); }
-    catch (e) { setError((e as Error).message); }
-  }, []);
-  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, [load]);
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const result = await api.get<Data>(`/api/supervision/progress?${qs({ view })}`);
+        if (active) { setData(result); setError(''); }
+      } catch (e) {
+        if (active) { setData(null); setError((e as Error).message); }
+      }
+    };
+    setData(null);
+    setError('');
+    load();
+    const timer = setInterval(load, 10000);
+    return () => { active = false; clearInterval(timer); };
+  }, [view, refresh]);
   const confirm = async (id: number) => {
     setConfirming(id);
-    try { await api.post(`/api/submissions/${id}/confirm`); message.success('已最终确认，管理员与教师个人总览已同步'); await load(); }
-    catch (e) { message.error((e as Error).message); }
+    try {
+      await api.post(`/api/submissions/${id}/confirm`);
+      message.success('已最终确认，个人与监督总览已同步');
+      setRefresh((n) => n + 1);
+    } catch (e) { message.error((e as Error).message); }
     finally { setConfirming(null); }
   };
-  const scoped = data?.rows.filter((r) => (!group || r.course_group === group) && `${r.name} ${r.username} ${r.course_name}`.toLowerCase().includes(q.trim().toLowerCase())) ?? [];
+  const scoped = data?.rows.filter((r) => (!group || r.course_group === group) && (!program || r.professional === program)
+    && `${r.name} ${r.writer_name} ${r.username} ${r.course_name} ${r.teacher_names}`.toLowerCase().includes(q.trim().toLowerCase())) ?? [];
+  const people = new Map<string, PersonRow>();
+  for (const course of scoped) {
+    const key = course.user_id !== null ? `user:${course.user_id}` : course.writer_name || course.username ? JSON.stringify([course.username, course.writer_name]) : 'unassigned';
+    if (!people.has(key)) people.set(key, { key, name: course.name || course.writer_name || course.username || '待分配', username: course.username,
+      unmatched: course.user_id === null && !!(course.writer_name || course.username), courses: [] });
+    people.get(key)!.courses.push(course);
+  }
+  const peopleRows = [...people.values()];
   const uploaded = scoped.filter((r) => r.latest_id !== null).length;
-  const passed = scoped.filter((r) => r.status === 'done' && r.verdict === 'passed').length;
-  const confirmed = scoped.filter((r) => r.status === 'done' && r.confirmed_at !== null).length;
-  const rows = scoped.filter((r) => status === 'missing' ? r.latest_id === null : status === 'uploaded' ? r.latest_id !== null : status === 'pending' ? r.confirmed_at === null : status === 'confirmed' ? r.confirmed_at !== null : true);
-  return <div className="page">
-    <div className="page-head"><div><h1>{data?.college ? '全院总览' : '课程组总览'}</h1>
-      <div className="sub">{user?.college_role === 'teaching' ? '教学条线' : user?.college_role === 'program' ? '专业负责人' : user?.role === 'admin' ? '管理员' : '课程组长'}：{user?.name}。{data?.college ? '可查看全院整周应交进度。' : '仅显示本人负责课程组的磨课清单课程（周一至周三），不含其他课程组数据。'}</div></div>
-      <Button onClick={load}>刷新进度</Button></div>
+  const passed = scoped.filter(isPassed).length;
+  const confirmed = scoped.filter(isConfirmed).length;
+  const unassigned = scoped.filter((r) => r.user_id === null && !r.writer_name && !r.username).length;
+  const courseRows = scoped.filter((r) => status === 'missing' ? r.latest_id === null : status === 'uploaded' ? r.latest_id !== null
+    : status === 'pending' ? !isConfirmed(r) : status === 'confirmed' ? isConfirmed(r) : true);
+  const courseTable = (rows: RequirementRow[], paginated = false) => <Table<RequirementRow> rowKey="id" size="small" dataSource={rows}
+    pagination={paginated ? { current: page, pageSize: 20, showSizeChanger: false, total: rows.length, onChange: setPage, showTotal: (n) => `共 ${n} 份应交大纲` } : false}
+    columns={[
+      { title: '应交课程', width: 240, render: (_, r) => <div>{r.course_name}<div className="muted small">{r.course_group || '未分组'} · {r.professional || '未配置审核专业'}</div></div> },
+      { title: '执笔人', width: 160, render: (_, r) => <div>{r.name || r.writer_name || r.username || '待分配'}<div className="muted small">{r.username}</div>{r.user_id === null && (r.writer_name || r.username) && <Tag>未匹配到账号</Tag>}</div> },
+      { title: '最新检查', width: 120, render: (_, r) => r.latest_id === null ? '未上传' : <SubmissionTag status={r.status} verdict={r.verdict} /> },
+      { title: '最终确认', width: 170, render: (_, r) => <div><ConfirmationTag status={r.status} confirmedAt={r.confirmed_at} />{r.confirmed_by && <div className="muted small">{r.confirmed_by}</div>}</div> },
+      { title: '操作', width: 150, render: (_, r) => <Space orientation="vertical" size={6}>
+        {r.latest_id !== null && <Link to={`/submissions/${r.latest_id}`}>在线查看大纲与结果</Link>}
+        {r.can_confirm && r.latest_id !== null && r.status === 'done' && !r.confirmed_at && <Popconfirm title="组长最终确认此份大纲？" description="确认后直接视为最终确认，无需教师再次确认。" onConfirm={() => confirm(r.latest_id!)}><Button size="small" type="primary" loading={confirming === r.latest_id}>组长最终确认</Button></Popconfirm>}
+      </Space> },
+    ]} />;
+  const actions = <Space wrap>
+    <Button onClick={() => setRefresh((n) => n + 1)}>刷新进度</Button>
+    {user && (user.role === 'admin' || user.supervision_manager === 1) && <Link to="/view-management"><Button>视图与执笔人配置</Button></Link>}
+  </Space>;
+  return <div className={embedded ? undefined : 'page'}>
+    {!embedded && <div className="page-head"><div><h1>{data ? VIEW_NAMES[data.view] : '监督总览'}</h1>
+      <div className="sub">{user?.name}：按已授权范围查看云文档大纲清单，执笔人为最终上传责任人。</div></div>
+      {actions}</div>}
     {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />}
-    <Card loading={!data && !error}>
+    {data && !data.source && <Alert type="warning" showIcon title="尚未导入大纲云文档清单"
+      description="请由 root 或汤家华在“视图与执笔人配置”中同步云表，或上传云表导出的 Excel / CSV。原课表和磨课表不再用作大纲应交范围。" style={{ marginBottom: 16 }} />}
+    {data?.view === 'program' && !data.programs.length && <Alert type="warning" showIcon title="尚未配置负责专业"
+      description="专业总览已开放，请联系 root 或汤家华在“视图与执笔人配置”中指定负责专业；配置后即可查看该专业进度。" style={{ marginBottom: 16 }} />}
+    <Card loading={!data && !error} title={embedded ? '大纲进度总览' : undefined} extra={embedded ? actions : undefined}>
       <Space wrap style={{ marginBottom: 20 }}>
+        {data && <Select value={data.view} aria-label="监督视图" style={{ width: 170 }} options={data.views.map((v) => ({ value: v, label: VIEW_NAMES[v] }))}
+          onChange={(next) => { setParams({ view: next }); setGroup(''); setProgram(''); setPage(1); }} />}
         <Select value={group} aria-label="监督课程组筛选" onChange={(v) => { setGroup(v); setPage(1); }} style={{ width: 280 }} options={[{ value: '', label: '全部授权课程组' }, ...(data?.groups ?? []).filter(Boolean).map((g) => ({ value: g, label: g }))]} />
-        <Input placeholder="教师 / 工号 / 课程" value={q} allowClear onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ width: 220 }} />
+        <Select value={program} aria-label="监督专业筛选" onChange={(v) => { setProgram(v); setPage(1); }} style={{ width: 220 }} options={[{ value: '', label: '全部授权专业' }, ...(data?.programs ?? []).filter(Boolean).map((p) => ({ value: p, label: p }))]} />
+        <Input placeholder="执笔人 / 工号 / 课程 / 任课教师" value={q} allowClear onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ width: 250 }} />
       </Space>
       <Row gutter={[16, 16]}>
-        {([['任课教师', new Set(scoped.map((r) => r.username)).size, '人'], ['应交大纲', scoped.length, '份'], ['已上传', uploaded, '份'], ['未上传', scoped.length - uploaded, '份'], ['最新检查通过', passed, '份'], ['最终已确认', confirmed, '份']] as const).map(([title, value, suffix]) => <Col xs={12} md={4} key={title}><Statistic title={title} value={value} suffix={suffix} /></Col>)}
+        <Col xs={12} md={4}><Statistic title="应交大纲" value={scoped.length} suffix="份" /></Col>
+        <Col xs={12} md={4}><Statistic title="已上传 / 应交" value={uploaded} suffix={`/ ${scoped.length} 份`} /></Col>
+        <Col xs={12} md={4}><Statistic title="已通过 / 应交" value={passed} suffix={`/ ${scoped.length} 份`} /></Col>
+        <Col xs={12} md={4}><Statistic title="最终确认 / 应交" value={confirmed} suffix={`/ ${scoped.length} 份`} /></Col>
+        <Col xs={12} md={4}><Statistic title="尚未上传" value={scoped.length - uploaded} suffix="份" /></Col>
+        <Col xs={12} md={4}><Statistic title="待分配执笔人" value={unassigned} suffix="份" /></Col>
       </Row>
-      <Alert type="info" showIcon style={{ margin: '20px 0' }} title="按教师工号＋课程合并平行班，每项只计一份。"
-        description="取最新检查及最终确认状态。课程组长可查看本组磨课清单内的上传文件和检查结果，组长确认直接视为最终确认，无需教师再次确认；只具有全院查看身份的人员不能代组长确认。重新上传后需确认新结果。上方数字随课程组和搜索变化，不受下方状态筛选影响。" />
-      <Select value={status} aria-label="监督上传状态筛选" onChange={(v) => { setStatus(v); setPage(1); }} style={{ width: 180, marginBottom: 16 }} options={[{ value: '', label: '全部状态' }, { value: 'missing', label: '未上传' }, { value: 'uploaded', label: '已上传' }, { value: 'pending', label: '未最终确认' }, { value: 'confirmed', label: '已最终确认' }]} />
-      <Table<RowData> rowKey={(r) => JSON.stringify([r.username, r.course_name])} dataSource={rows}
-        pagination={{ current: page, pageSize: 20, showSizeChanger: false, total: rows.length, onChange: setPage, showTotal: (n) => `共 ${n} 份应交大纲` }}
-        columns={[
-          { title: '任课教师', width: 160, render: (_, r) => <div>{r.name}<div className="muted small">{r.username}</div></div> },
-          { title: '应交课程', width: 240, render: (_, r) => <div>{r.course_name}<div className="muted small">{r.course_group || '未分组'}</div></div> },
-          { title: '最新检查', width: 120, render: (_, r) => r.latest_id === null ? '未上传' : <SubmissionTag status={r.status} verdict={r.verdict} /> },
-          { title: '最终确认', width: 170, render: (_, r) => <div><ConfirmationTag status={r.status} confirmedAt={r.confirmed_at} />{r.confirmed_by && <div className="muted small">{r.confirmed_by}</div>}{r.confirmed_at && <div className="muted small">{r.confirmed_at}</div>}</div> },
-          { title: '操作', width: 150, render: (_, r) => <Space orientation="vertical" size={6}>
-            {r.latest_id !== null && <Link to={`/submissions/${r.latest_id}`}>在线查看大纲与结果</Link>}
-            {r.can_confirm && r.latest_id !== null && r.status === 'done' && !r.confirmed_at && <Popconfirm title="组长最终确认此份大纲？" description="确认后同步到管理员和个人端，无需教师再确认。" onConfirm={() => confirm(r.latest_id!)}><Button size="small" type="primary" loading={confirming === r.latest_id}>组长最终确认</Button></Popconfirm>}
-          </Space> },
-        ]} />
+      <Alert type="info" showIcon style={{ margin: '20px 0' }} title="以大纲云文档清单为应交范围，与磨课安排无关。"
+        description="每项应交大纲取执笔人的最新检查及确认状态。空执笔人仍计入总应交数，暂不计入任何个人名下；未匹配账号可由 root 或汤家华手动绑定。组长确认直接视为最终确认，新上传需重新确认。上方统计随课程组、审核专业和搜索变化，不受课程状态筛选影响。" />
+      <Tabs defaultActiveKey="people" onChange={() => setPage(1)} items={[
+        { key: 'people', label: '人员进度', children: <Table<PersonRow> rowKey="key" dataSource={peopleRows}
+          expandable={{ expandedRowRender: (r) => courseTable(r.courses) }}
+          pagination={{ current: page, pageSize: 20, showSizeChanger: false, total: peopleRows.length, onChange: setPage, showTotal: (n) => `共 ${n} 项人员进度（待分配单列）` }}
+          columns={[
+            { title: '执笔人', width: 190, render: (_, r) => <div><strong>{r.name}</strong><div className="muted small">{r.username}</div>{r.unmatched && <Tag>未匹配到账号</Tag>}{r.key === 'unassigned' && <Tag>不计入个人应交</Tag>}</div> },
+            { title: '需要上传', width: 100, render: (_, r) => `${r.courses.length} 份` },
+            { title: '已上传 / 应交', width: 130, render: (_, r) => `${r.courses.filter((c) => c.latest_id !== null).length} / ${r.courses.length}` },
+            { title: '已通过 / 应交', width: 160, render: (_, r) => <div>{r.courses.filter(isPassed).length} / {r.courses.length}{r.key !== 'unassigned' && <div><Tag color={r.courses.every(isPassed) ? 'success' : undefined}>{r.courses.every(isPassed) ? '全部已通过' : '尚未全部通过'}</Tag></div>}</div> },
+            { title: '最终确认 / 应交', width: 140, render: (_, r) => `${r.courses.filter(isConfirmed).length} / ${r.courses.length}` },
+          ]} /> },
+        { key: 'courses', label: '逐份大纲', children: <>
+          <Select value={status} aria-label="监督上传状态筛选" onChange={(v) => { setStatus(v); setPage(1); }} style={{ width: 180, marginBottom: 16 }} options={[{ value: '', label: '全部状态' }, { value: 'missing', label: '未上传' }, { value: 'uploaded', label: '已上传' }, { value: 'pending', label: '未最终确认' }, { value: 'confirmed', label: '已最终确认' }]} />
+          {courseTable(courseRows, true)}
+        </> },
+      ]} />
     </Card>
   </div>;
 }

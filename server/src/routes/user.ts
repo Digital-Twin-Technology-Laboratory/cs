@@ -13,15 +13,15 @@ import { reportDocx, reportText, type ReportInput } from '../services/report.js'
 import { SECTION_META } from '../seed/checklist.js';
 import type { CheckResult } from '../services/ai/schema.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
-import { getProgress, leadsSubmission } from '../services/progress.js';
+import { getOutlineRows, groupOutlinePeople, supervisesOutlineSubmission } from '../services/outlineProgress.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
 
 userRouter.get('/progress', (req, res) => {
-  const person = getProgress(req.user!.username)[0];
+  const person = groupOutlinePeople(getOutlineRows().filter((r) => r.user_id === req.user!.id))[0];
   res.json({
-    configured: !!db.prepare("SELECT 1 FROM settings WHERE key = 'progress_roster'").get(),
+    configured: !!db.prepare("SELECT 1 FROM settings WHERE key = 'outline_source'").get(),
     required: person?.required_count ?? 0,
     uploaded: person?.uploaded_count ?? 0,
     passed: person?.passed_count ?? 0,
@@ -30,25 +30,8 @@ userRouter.get('/progress', (req, res) => {
   });
 });
 
-userRouter.get('/supervision/progress', (req, res) => {
-  const user = req.user!;
-  const college = user.role === 'admin' || user.college_role !== 'none';
-  if (!college && !user.led_groups.length) return res.status(403).json({ error: '没有课程监督权限' });
-  const people = getProgress(undefined, college ? undefined : user.led_groups, !college);
-  const rows = people.flatMap((p) => p.courses.map((course) => ({
-    ...course, username: p.username, name: p.name,
-    can_confirm: course.in_plan === 1 && user.led_groups.includes(course.course_group),
-  })));
-  res.json({
-    college, groups: [...new Set(rows.map((r) => r.course_group))].sort(), rows,
-    summary: { people: people.length, required: rows.length, uploaded: rows.filter((r) => r.latest_id !== null).length,
-      passed: rows.filter((r) => r.status === 'done' && r.verdict === 'passed').length,
-      confirmed: rows.filter((r) => r.status === 'done' && r.confirmed_at !== null).length },
-  });
-});
-
 const thisYear = new Date().getFullYear();
-const majors = ['计算机科学与技术', '人工智能', '物联网工程', '中外物联网'] as const;
+const majors = ['计算机科学与技术', '人工智能', '物联网工程', '中外物联网', '物联网工程（合作办学）', '智能无人机系统与应用（微专业）', '计算机公共教学'] as const;
 const studentGrades = [2023, 2024, 2025, 2026];
 export const courseSchema = z.object({
   name: z.string().trim().min(1, '请填写课程名称').max(100),
@@ -117,7 +100,7 @@ userRouter.get('/options', (req, res) => {
     maxUploadMB: site.maxUploadMB,
     aiReady: aiReady() === null,
     checklist: checklist ? { id: checklist.id, name: checklist.name } : null,
-    requiredCourses: db.prepare('SELECT course_name AS name FROM progress_requirements WHERE username = ? ORDER BY course_name').all(req.user!.username),
+    requiredCourses: db.prepare('SELECT DISTINCT course_name AS name, professional FROM outline_requirements WHERE writer_user_id = ? ORDER BY course_name').all(req.user!.id),
   });
 });
 
@@ -241,7 +224,7 @@ type SubFull = {
 
 function getOwnSub(req: Request, res: Response): SubFull | null {
   const s = db.prepare('SELECT * FROM submissions WHERE id = ?').get(Number(req.params.id)) as SubFull | undefined;
-  if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin' && req.user!.college_role === 'none' && !leadsSubmission(req.user!, s.id))) {
+  if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin' && !supervisesOutlineSubmission(req.user!, s.id))) {
     res.status(404).json({ error: '记录不存在' });
     return null;
   }
@@ -291,7 +274,7 @@ userRouter.get('/submissions/:id', (req, res) => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { result_json, course_snapshot, file_path, ...rest } = s;
   res.json({
-    submission: { ...rest, canConfirm: s.user_id === req.user!.id || leadsSubmission(req.user!, s.id, true), course: JSON.parse(course_snapshot), result: result_json ? JSON.parse(result_json) : null, queuePosition, owner },
+    submission: { ...rest, canConfirm: s.user_id === req.user!.id || supervisesOutlineSubmission(req.user!, s.id, true, true), course: JSON.parse(course_snapshot), result: result_json ? JSON.parse(result_json) : null, queuePosition, owner },
     checklist: checklist
       ? { id: checklist.id, name: checklist.name, items: checklist.items.map(({ code, section, title, content }) => ({ code, section, title, content })) }
       : null,
@@ -302,8 +285,8 @@ userRouter.get('/submissions/:id', (req, res) => {
 userRouter.post('/submissions/:id/confirm', (req, res) => {
   const s = getOwnSub(req, res);
   if (!s) return;
-  const isLeader = leadsSubmission(req.user!, s.id, true);
-  if (s.user_id !== req.user!.id && !isLeader) return res.status(403).json({ error: '只能确认本人结果或本组磨课清单内课程的最新结果' });
+  const isLeader = supervisesOutlineSubmission(req.user!, s.id, true, true);
+  if (s.user_id !== req.user!.id && !isLeader) return res.status(403).json({ error: '只能确认本人结果或本组应交大纲的最新结果' });
   if (s.status !== 'done' || !s.result_json || !s.verdict) {
     return res.status(400).json({ error: '检查完成后才能确认上传结果' });
   }

@@ -20,7 +20,8 @@ export default function Profile() {
 
   const savePw = async (v: { oldPassword: string; newPassword: string }) => {
     try {
-      await api.put('/api/auth/password', v);
+      const result = await api.put<{ user: User }>('/api/auth/password', v);
+      setUser(result.user);
       message.success('密码已修改');
       pwForm.resetFields();
     } catch (e) {
@@ -37,7 +38,7 @@ export default function Profile() {
         <Card title="账号信息">
           <Descriptions size="small" column={1} style={{ marginBottom: 16 }}>
             <Descriptions.Item label="用户名 / 工号">{user?.username}</Descriptions.Item>
-            <Descriptions.Item label="登录方式">{user?.role === 'user' ? '工号 / 姓名 + 密码' : '用户名 + 密码'}</Descriptions.Item>
+            <Descriptions.Item label="登录方式">工号 / 姓名 / 用户名 + 密码</Descriptions.Item>
             <Descriptions.Item label="角色">{user?.role === 'admin' ? '管理员' : '普通用户'}</Descriptions.Item>
             <Descriptions.Item label="注册时间">{user?.created_at}</Descriptions.Item>
           </Descriptions>

@@ -23,20 +23,20 @@ export default function Overview() {
   }, [load]);
   return <div className="page">
     <div className="page-head">
-      <div><h1>个人总览</h1><div className="sub">仅显示你本人在管理员整周课表名单中的应交课程，每 10 秒自动刷新。</div></div>
+      <div><h1>个人总览</h1><div className="sub">仅显示云文档清单中指定你为执笔人的应交课程，每 10 秒自动刷新。</div></div>
       <Link to="/upload"><Button type="primary">上传大纲</Button></Link>
     </div>
     {error && <Alert type="error" showIcon title={error} action={<Button onClick={load}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Card loading={!data && !error}>
       {data && <>
         <Row gutter={[16, 16]}>
-          {([['required', '应交大纲'], ['uploaded', '已上传'], ['passed', '已通过'], ['confirmed', '最终已确认']] as const).map(([key, title]) => <Col xs={12} md={6} key={key}><Statistic title={title} value={data[key]} suffix="份" /></Col>)}
+          {([['required', '应交大纲'], ['uploaded', '已上传'], ['passed', '已通过'], ['confirmed', '最终已确认']] as const).map(([key, title]) => <Col xs={12} md={6} key={key}><Statistic title={title} value={key === 'required' ? data[key] : `${data[key]} / ${data.required}`} suffix="份" /></Col>)}
         </Row>
         <Alert type="info" showIcon style={{ margin: '20px 0' }}
-          title="同一教师的同一课程合并平行班和重复课次，只需一份大纲。"
-          description="按课程名称匹配你的上传，取每门课程最新一次检查及确认状态；未上传课程也计入应交总数。所有应交课程的最新检查均通过，才算个人全部通过。确认独立于通过，重新上传后需确认新结果。名单外课程不计入这些统计。" />
+          title="按云清单的课程、审核专业和课程组合并平行班，由指定执笔人上传。"
+          description="按课程名称和审核专业匹配你的上传，取最新检查及确认；所有应交课程均通过才算个人全部通过。重新上传需重新确认；执笔人调整后，个人应交范围同步调整。名单外课程不计入这些统计。" />
         {!data.configured ? <Empty description="管理员尚未导入统计名单，请联系管理员。" />
-          : data.required === 0 ? <Empty description="当前整周课表名单中没有与你的工号匹配的应交课程，请联系管理员核对。" />
+          : data.required === 0 ? <Empty description="当前没有指定你为执笔人的应交大纲；如需调整，请联系管理员配置执笔人。" />
             : <CourseProgressTable courses={data.courses} />}
       </>}
     </Card>

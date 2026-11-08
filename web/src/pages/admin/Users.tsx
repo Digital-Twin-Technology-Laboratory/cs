@@ -199,7 +199,7 @@ export default function Users() {
             {
               title: '监督身份', width: 200, render: (_, r) => <div>
                 <Select<User['college_role'] | 'group_leader'>
-                  value={r.college_role === 'none' && r.led_groups.length ? 'group_leader' : r.college_role}
+                  value={r.college_role !== 'none' ? r.college_role : r.program_scopes.length ? 'program' : r.led_groups.length ? 'group_leader' : 'none'}
                   style={{ width: '100%' }}
                   aria-label={`${r.name}的监督身份`}
                   onSelect={(identity) => identity === 'group_leader'
@@ -213,7 +213,9 @@ export default function Users() {
                   ]}
                 />
                 {r.led_groups.map((group) => <div key={group} className="muted small">课程组长：{group}</div>)}
+                {r.program_scopes.map((professional) => <div key={professional} className="muted small">负责专业：{professional}</div>)}
                 {r.led_groups.length > 0 && <Button type="link" size="small" style={{ padding: 0 }} onClick={() => editLeader(r)}>设置课程组</Button>}
+                {(r.college_role === 'program' || r.program_scopes.length > 0) && <Button type="link" size="small" style={{ padding: 0 }} onClick={() => nav('/view-management')}>配置专业范围</Button>}
               </div>,
             },
             {
@@ -338,8 +340,8 @@ export default function Users() {
         <Alert
           type="info"
           showIcon
-          title="首次使用工号和姓名激活，之后使用密码登录"
-          description="首次登录后会告知初始密码，教工可在个人设置中修改。同名教工须使用工号登录。已有工号会跳过，不修改原账号、密码或权限。"
+          title="使用工号或姓名和初始密码登录，首次强制修改密码"
+          description="新导入账号的初始密码为 12345678，修改密码后才能使用系统。同名教工须使用工号。已有工号会跳过，不修改原账号、密码或权限。"
           style={{ marginBottom: 16 }}
         />
         <p>支持 Excel（.xlsx，第一个工作表）或 UTF-8 编码的 CSV。第一行包含“姓名”和“工号”两列，列顺序不限；工号列请设为文本，保留前导零。</p>

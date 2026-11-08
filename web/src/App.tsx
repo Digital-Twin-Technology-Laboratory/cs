@@ -4,6 +4,7 @@ import { useAuth } from './auth';
 import AppLayout from './layouts/AppLayout';
 import AdminLayout from './layouts/AdminLayout';
 import Login from './pages/Login';
+import ChangePassword from './pages/ChangePassword';
 import Register from './pages/Register';
 import Upload from './pages/user/Upload';
 import Courses from './pages/user/Courses';
@@ -13,6 +14,7 @@ import Submissions from './pages/user/Submissions';
 import Profile from './pages/user/Profile';
 import Overview from './pages/user/Overview';
 import Supervision from './pages/user/Supervision';
+import ViewManagement from './pages/user/ViewManagement';
 import Dashboard from './pages/admin/Dashboard';
 import Users from './pages/admin/Users';
 import Records from './pages/admin/Records';
@@ -27,6 +29,7 @@ function RequireAuth({ children, admin }: { children: React.ReactNode; admin?: b
   const { user } = useAuth();
   const loc = useLocation();
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />;
+  if (user.must_change_password) return <Navigate to="/change-password" replace />;
   if (admin && user.role !== 'admin') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
@@ -42,6 +45,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/change-password" element={!user ? <Navigate to="/login" replace /> : user.must_change_password ? <ChangePassword /> : <Navigate to="/" replace />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />
       <Route
         element={
@@ -53,6 +57,7 @@ export default function App() {
         <Route index element={<Navigate to="/overview" replace />} />
         <Route path="overview" element={<Overview />} />
         <Route path="supervision" element={<Supervision />} />
+        <Route path="view-management" element={user && (user.role === 'admin' || user.supervision_manager) ? <ViewManagement /> : <Navigate to="/" replace />} />
         <Route path="upload" element={<Upload />} />
         <Route path="courses" element={<Courses />} />
         <Route path="courses/:id" element={<CourseDetail />} />

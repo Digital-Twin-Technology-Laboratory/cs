@@ -11,6 +11,9 @@ export interface User {
   role: Role;
   college_role: 'none' | 'teaching' | 'program';
   led_groups: string[];
+  program_scopes: string[];
+  supervision_manager: number;
+  must_change_password: number;
   status: UserStatus;
   created_at: string;
   last_login_at: string | null;
@@ -62,9 +65,10 @@ export interface CheckResult {
 export type SubStatus = 'queued' | 'running' | 'done' | 'failed';
 
 export interface RequiredCourseProgress {
+  id: number;
   course_name: string;
   course_group: string;
-  in_plan: number;
+  professional: string;
   latest_id: number | null;
   status: SubStatus | null;
   verdict: 'passed' | 'failed' | null;
@@ -157,7 +161,7 @@ export interface SubmissionRow {
 }
 
 export interface Options {
-  requiredCourses: { name: string }[];
+  requiredCourses: { name: string; professional: string }[];
   majors: string[];
   studentGrades: number[];
   plans: { major: string; training_type: string; grade: number; name: string }[];
