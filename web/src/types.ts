@@ -69,6 +69,8 @@ export interface RequiredCourseProgress {
   course_name: string;
   course_group: string;
   professional: string;
+  uploader_name: string;
+  uploader_username: string;
   latest_id: number | null;
   status: SubStatus | null;
   verdict: 'passed' | 'failed' | null;
@@ -162,6 +164,7 @@ export interface SubmissionRow {
 
 export interface Options {
   requiredCourses: { name: string; professional: string }[];
+  outlineCourses: { id: number; name: string; professional: string; course_group: string }[];
   majors: string[];
   studentGrades: number[];
   plans: { major: string; training_type: string; grade: number; name: string }[];

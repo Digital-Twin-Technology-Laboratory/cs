@@ -17,6 +17,9 @@ export interface OutlineProgressRow {
   username: string;
   name: string;
   user_id: number | null;
+  uploader_id: number | null;
+  uploader_name: string;
+  uploader_username: string;
   latest_id: number | null;
   status: 'queued' | 'running' | 'done' | 'failed' | null;
   verdict: 'passed' | 'failed' | null;
@@ -26,19 +29,32 @@ export interface OutlineProgressRow {
 }
 
 // The legacy upload form called the cooperative program "中外物联网".
-const matchingMajor = "(c.major = r.professional OR (c.major = '中外物联网' AND r.professional = '物联网工程（合作办学）'))";
+const matchingMajor = (course: string, requirement: string) => `(${course}.major = ${requirement}.professional OR (${course}.major = '中外物联网' AND ${requirement}.professional = '物联网工程（合作办学）'))`;
+
+function matchesOutline(submission: string, course: string) {
+  return `(${submission}.outline_requirement_id = r.id OR (
+    ${submission}.outline_requirement_id IS NULL
+    AND TRIM(${course}.name) = r.course_name COLLATE NOCASE AND ${matchingMajor(course, 'r')}
+    AND (SELECT COUNT(*) FROM outline_requirements other
+      WHERE other.course_name = TRIM(${course}.name) COLLATE NOCASE AND ${matchingMajor(course, 'other')}) = 1
+  ))`;
+}
 
 export function getOutlineRows() {
   return db.prepare(`
     SELECT r.*, u.id AS user_id, COALESCE(u.username, r.writer_identifier) AS username,
       COALESCE(u.name, r.writer_name) AS name,
       s.id AS latest_id, s.status, s.verdict, s.confirmed_at,
-      COALESCE(s.confirmed_by, '') AS confirmed_by, s.created_at
+      COALESCE(s.confirmed_by, '') AS confirmed_by, s.created_at,
+      uploader.id AS uploader_id, COALESCE(uploader.name, '') AS uploader_name,
+      COALESCE(uploader.username, '') AS uploader_username
     FROM outline_requirements r LEFT JOIN users u ON u.id = r.writer_user_id
     LEFT JOIN submissions s ON s.id = (
       SELECT MAX(s2.id) FROM submissions s2 JOIN courses c ON c.id = s2.course_id
-      WHERE s2.user_id = u.id AND TRIM(c.name) = r.course_name COLLATE NOCASE AND ${matchingMajor}
-    ) ORDER BY r.course_group, r.professional, r.course_name
+      WHERE ${matchesOutline('s2', 'c')}
+    )
+    LEFT JOIN users uploader ON uploader.id = s.user_id
+    ORDER BY r.course_group, r.professional, r.course_name
   `).all() as OutlineProgressRow[];
 }
 
@@ -90,15 +106,14 @@ export function groupOutlinePeople(rows: OutlineProgressRow[]) {
 
 export function supervisesOutlineSubmission(user: PublicUser, submissionId: number, confirm = false, latestOnly = false) {
   const matches = db.prepare(`
-    SELECT r.course_group, r.professional FROM submissions s JOIN courses c ON c.id = s.course_id
-    JOIN outline_requirements r ON r.writer_user_id = s.user_id
-      AND r.course_name = TRIM(c.name) COLLATE NOCASE AND ${matchingMajor}
+    SELECT r.course_group, r.professional, r.writer_user_id FROM submissions s JOIN courses c ON c.id = s.course_id
+    JOIN outline_requirements r ON ${matchesOutline('s', 'c')}
     WHERE s.id = ? ${latestOnly ? `AND s.id = (
       SELECT MAX(s2.id) FROM submissions s2 JOIN courses c ON c.id = s2.course_id
-      WHERE s2.user_id = r.writer_user_id AND TRIM(c.name) = r.course_name COLLATE NOCASE AND ${matchingMajor}
+      WHERE ${matchesOutline('s2', 'c')}
     )` : ''}
-  `).all(submissionId) as { course_group: string; professional: string }[];
+  `).all(submissionId) as { course_group: string; professional: string; writer_user_id: number | null }[];
   return matches.some((r) => user.led_groups.includes(r.course_group)
-    || (!confirm && (user.college_role === 'teaching'
+    || (!confirm && (r.writer_user_id === user.id || user.college_role === 'teaching'
       || user.program_scopes.includes(r.professional))));
 }

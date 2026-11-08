@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { SEED_INTRO, SEED_ITEMS, SEED_NAME, SEED_NOTES, SEED_RULES } from './seed/checklist.js';
+import { COLLEGE_PRESETS, GROUP_PRESETS } from './services/supervisionRoles.js';
 
 const raw = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
@@ -154,6 +155,7 @@ CREATE TABLE IF NOT EXISTS courses (
 CREATE TABLE IF NOT EXISTS submissions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  outline_requirement_id INTEGER REFERENCES outline_requirements(id) ON DELETE SET NULL,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   seq INTEGER NOT NULL,
   file_name TEXT NOT NULL,
@@ -219,7 +221,48 @@ if (!db.prepare("SELECT 1 FROM settings WHERE key = 'supervision_manager_initial
   db.prepare("INSERT INTO settings (key, value) VALUES ('supervision_manager_initialized', '1')").run();
 }
 
+export function applyDefaultProfessionalView(userId: number, name: string) {
+  const preset = COLLEGE_PRESETS.find((p) => p.name === name);
+  if (!preset || preset.role !== 'program') return;
+  const matches = db.prepare('SELECT id FROM users WHERE name = ?').all(name);
+  if (matches.length !== 1) return;
+  db.prepare("UPDATE users SET college_role = 'program' WHERE id = ? AND college_role = 'none'").run(userId);
+}
+
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'professional_views_initialized'").get()) {
+  db.transaction(() => {
+    for (const preset of COLLEGE_PRESETS) {
+      if (preset.role !== 'program') continue;
+      const matches = db.prepare('SELECT id FROM users WHERE name = ?').all(preset.name) as { id: number }[];
+      if (matches.length === 1) applyDefaultProfessionalView(matches[0].id, preset.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('professional_views_initialized', '1')").run();
+  })();
+}
+
+export function applyDefaultGroupView(userId: number, name: string) {
+  const preset = GROUP_PRESETS.find((p) => p.name === name);
+  if (!preset) return;
+  if (db.prepare('SELECT id FROM users WHERE name = ?').all(name).length !== 1) return;
+  if (db.prepare('SELECT 1 FROM course_group_leaders WHERE user_id = ?').get(userId)) return;
+  db.prepare('INSERT INTO course_group_leaders (course_group, user_id) VALUES (?, ?) ON CONFLICT(course_group) DO NOTHING').run(preset.group, userId);
+}
+
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'course_group_views_initialized'").get()) {
+  db.transaction(() => {
+    for (const preset of GROUP_PRESETS) {
+      const matches = db.prepare('SELECT id FROM users WHERE name = ?').all(preset.name) as { id: number }[];
+      if (matches.length === 1) applyDefaultGroupView(matches[0].id, preset.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('course_group_views_initialized', '1')").run();
+  })();
+}
+
 const submissionColumns = db.prepare('PRAGMA table_info(submissions)').all() as { name: string }[];
+if (!submissionColumns.some((column) => column.name === 'outline_requirement_id')) {
+  db.exec('ALTER TABLE submissions ADD COLUMN outline_requirement_id INTEGER REFERENCES outline_requirements(id) ON DELETE SET NULL');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_sub_outline_requirement ON submissions(outline_requirement_id)');
 if (!submissionColumns.some((column) => column.name === 'confirmed_at')) {
   db.exec('ALTER TABLE submissions ADD COLUMN confirmed_at TEXT');
 }

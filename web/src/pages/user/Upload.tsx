@@ -12,7 +12,7 @@ interface UploadValues {
   trainingType: string;
   planGrade: number;
   adjustNote?: string;
-  outlines: Record<string, Pick<CourseInfo, 'name' | 'major' | 'studentGrade'>>;
+  outlines: Record<string, Pick<CourseInfo, 'name' | 'major' | 'studentGrade'> & { outlineRequirementId?: number }>;
 }
 
 interface UploadResult {
@@ -52,7 +52,7 @@ export default function Upload() {
         setActiveUid(file.uid);
         const fd = new FormData();
         const fields = { ...values.outlines[file.uid], trainingType: values.trainingType, planGrade: values.planGrade, adjustNote: values.adjustNote ?? '' };
-        Object.entries(fields).forEach(([key, value]) => fd.append(key, String(value)));
+        Object.entries(fields).forEach(([key, value]) => { if (value !== undefined) fd.append(key, String(value)); });
         fd.append('file', file.originFileObj!);
         try {
           const r = await api.post<{ submissionId: number }>('/api/submissions', fd);
@@ -153,13 +153,24 @@ export default function Upload() {
                 {
                   title: '课程名称', width: 210,
                   render: (_: unknown, file: UploadFile) => (
-                    <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
-                      <AutoComplete options={(options?.requiredCourses ?? []).map((c) => ({ key: JSON.stringify([c.name, c.professional]), value: c.name, label: `${c.name}（${c.professional}）`, professional: c.professional }))}
-                        onSelect={(_, option) => form.setFieldValue(['outlines', file.uid, 'major'], option.professional)}
-                        filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
-                        <Input maxLength={100} aria-label={`${file.name}的课程名称`} />
-                      </AutoComplete>
-                    </Form.Item>
+                    <>
+                      <Form.Item name={['outlines', file.uid, 'outlineRequirementId']} hidden preserve={false}><Input type="hidden" /></Form.Item>
+                      <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
+                        <AutoComplete options={(options?.outlineCourses ?? []).map((c) => ({
+                          key: c.id, value: `${c.name}（${c.professional || '未配置专业'} / ${c.course_group || '未分组'}）`,
+                          name: c.name, professional: c.professional, requirementId: c.id,
+                        }))}
+                          onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)}
+                          onSelect={(_, option) => form.setFields([
+                            { name: ['outlines', file.uid, 'name'], value: option.name },
+                            { name: ['outlines', file.uid, 'major'], value: option.professional },
+                            { name: ['outlines', file.uid, 'outlineRequirementId'], value: option.requirementId },
+                          ])}
+                          filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
+                          <Input maxLength={100} aria-label={`${file.name}的课程名称`} />
+                        </AutoComplete>
+                      </Form.Item>
+                    </>
                   ),
                 },
                 {
@@ -174,7 +185,7 @@ export default function Upload() {
                   title: '专业', width: 210,
                   render: (_: unknown, file: UploadFile) => (
                     <Form.Item name={['outlines', file.uid, 'major']} rules={[{ required: true, message: '请选择专业' }]} style={{ marginBottom: 0 }} preserve={false}>
-                      <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />
+                      <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />
                     </Form.Item>
                   ),
                 },
@@ -195,7 +206,7 @@ export default function Upload() {
               ]}
             />
           )}
-          {files.length > 0 && <p className="muted small">系统按每行专业匹配培养方案；未预置方案时仍可检查，相关内容列为“需核实事项”。请从下拉选择你负责的准确课程名，系统同时填入审核专业，以便计入总览；名单外课程仍可上传。</p>}
+          {files.length > 0 && <p className="muted small">请从云清单下拉选择准确课程及课程组，系统会关联对应课程并填入审核专业；执笔人尚未指定也可上传，系统记录实际上传人并同步课程组进度。系统按每行专业匹配培养方案，未预置方案时仍可检查；名单外课程也可手工填写上传。</p>}
           <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
             {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>

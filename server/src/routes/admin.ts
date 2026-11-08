@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { audit, db } from '../db.js';
+import { applyDefaultGroupView, applyDefaultProfessionalView, audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
 import { DEFAULT_AI_SETTINGS, getSettings, saveSettings, type AiSettings } from '../settings.js';
 import { decrypt, encrypt, mask } from '../services/crypto.js';
@@ -178,9 +178,14 @@ adminRouter.post('/users', (req, res) => {
     })
     .parse(req.body);
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(body.username)) return res.status(400).json({ error: '该用户名已存在' });
-  const r = db
-    .prepare("INSERT INTO users (username, password_hash, name, department, role, status, must_change_password) VALUES (?, ?, ?, ?, ?, 'active', 1)")
-    .run(body.username, bcrypt.hashSync(body.password, 10), body.name, body.department, body.role);
+  const r = db.transaction(() => {
+    const created = db
+      .prepare("INSERT INTO users (username, password_hash, name, department, role, status, must_change_password) VALUES (?, ?, ?, ?, ?, 'active', 1)")
+      .run(body.username, bcrypt.hashSync(body.password, 10), body.name, body.department, body.role);
+    applyDefaultProfessionalView(created.lastInsertRowid, body.name);
+    applyDefaultGroupView(created.lastInsertRowid, body.name);
+    return created;
+  })();
   audit(req.user, '新建账号', body.username, body.role === 'admin' ? '管理员' : '普通用户', req.ip);
   res.json({ id: r.lastInsertRowid });
 });
@@ -194,7 +199,16 @@ adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, r
       const insert = db.prepare(
         "INSERT INTO users (username, password_hash, name, role, status, roster_login, must_change_password) VALUES (?, '', ?, 'user', 'active', 1, 1) ON CONFLICT(username) DO NOTHING",
       );
-      return entries.reduce((count, entry) => count + insert.run(entry.username, entry.name).changes, 0);
+      const added: { id: number; name: string }[] = [];
+      for (const entry of entries) {
+        const created = insert.run(entry.username, entry.name);
+        if (created.changes) added.push({ id: created.lastInsertRowid, name: entry.name });
+      }
+      for (const user of added) {
+        applyDefaultProfessionalView(user.id, user.name);
+        applyDefaultGroupView(user.id, user.name);
+      }
+      return added.length;
     })();
     const skipped = entries.length - imported;
     audit(req.user, '导入教工名单', file.originalname, `导入 ${imported} 个待激活教工账号，跳过 ${skipped} 个已有工号`, req.ip);

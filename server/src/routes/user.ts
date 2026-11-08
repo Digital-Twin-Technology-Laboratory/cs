@@ -101,6 +101,7 @@ userRouter.get('/options', (req, res) => {
     aiReady: aiReady() === null,
     checklist: checklist ? { id: checklist.id, name: checklist.name } : null,
     requiredCourses: db.prepare('SELECT DISTINCT course_name AS name, professional FROM outline_requirements WHERE writer_user_id = ? ORDER BY course_name').all(req.user!.id),
+    outlineCourses: db.prepare('SELECT id, course_name AS name, professional, course_group FROM outline_requirements ORDER BY course_group, professional, course_name').all(),
   });
 });
 
@@ -171,9 +172,20 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
     const checklistId = activeChecklistId();
     if (!checklistId) return res.status(400).json({ error: '管理员尚未设置生效的检查清单' });
 
-    const body = courseSchema.parse(req.body);
+    const body = courseSchema.extend({ outlineRequirementId: z.coerce.number().int().positive().optional() }).parse(req.body);
     const err = checkAdjust(body);
     if (err) return res.status(400).json({ error: err });
+
+    const requirements = db.prepare(`SELECT id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
+      AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）'))`)
+      .all(body.name, body.major, body.major) as { id: number }[];
+    if (body.outlineRequirementId !== undefined && !requirements.some((r) => r.id === body.outlineRequirementId)) {
+      return res.status(400).json({ error: '所选应交课程与课程名称、审核专业不一致，请重新选择清单课程' });
+    }
+    if (body.outlineRequirementId === undefined && requirements.length > 1) {
+      return res.status(400).json({ error: '同名课程属于多个课程组，请从云清单下拉中选择具体应交课程' });
+    }
+    const requirementId = body.outlineRequirementId ?? requirements[0]?.id ?? null;
 
     let text: string;
     try {
@@ -202,10 +214,10 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
     const seq = (db.prepare('SELECT COUNT(*) AS n FROM submissions WHERE course_id = ?').get(course.id) as { n: number }).n + 1;
     const r = db
       .prepare(
-        `INSERT INTO submissions (course_id, user_id, seq, file_name, file_path, file_size, extracted_text, checklist_version_id, plan_id, plan_name, course_snapshot)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO submissions (course_id, user_id, seq, file_name, file_path, file_size, extracted_text, checklist_version_id, plan_id, plan_name, course_snapshot, outline_requirement_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(course.id, req.user!.id, seq, file.originalname, rel, file.size, text, checklistId, plan?.id, plan?.name, JSON.stringify(snapshot));
+      .run(course.id, req.user!.id, seq, file.originalname, rel, file.size, text, checklistId, plan?.id, plan?.name, JSON.stringify(snapshot), requirementId);
     audit(req.user, '上传大纲', `${course.name} 第${seq}次`, file.originalname, req.ip);
     kickQueue();
     res.json({ submissionId: r.lastInsertRowid, courseId: course.id, planFound: !!plan });

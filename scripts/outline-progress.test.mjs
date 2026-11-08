@@ -1,6 +1,6 @@
 // Run: node --disable-warning=ExperimentalWarning --import tsx --test scripts/outline-progress.test.mjs
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
@@ -9,8 +9,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { Document, Packer, Paragraph } from 'docx';
 
-test('outline writers, scoped supervision and manual mappings use the course source only', { timeout: 30000 }, async (t) => {
+test('outline writers, scoped supervision and manual mappings use the course source only', { timeout: 60000 }, async (t) => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const dataDir = mkdtempSync(path.join(root, '.tmp-outline-progress-'));
   const reservation = http.createServer();
@@ -60,7 +61,10 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   const users = {};
   for (const [username, name] of [
     ['alice', '执笔人甲'], ['bob', '执笔人乙'], ['leader', '课程组长甲'], ['other-leader', '课程组长乙'],
-    ['head', '龚兰兰'], ['empty-head', '未配专业负责人'], ['dual', '兼任监督者'], ['tang', '汤家华'],
+    ['head', '龚兰兰'], ['head-ai', '刘正涛'], ['head-iot', '薛亮'],
+    ['empty-head', '未配专业负责人'], ['dual', '兼任监督者'], ['tang', '汤家华'],
+    ['preset-code', '王辉'], ['preset-algorithm', '张文哲'], ['preset-database', '尼洪涛'],
+    ['preset-hardware', '曹金华'], ['preset-network', '唐灯平'], ['preset-ai', '纪其进'],
   ]) {
     const created = await admin('/api/admin/users', { username, name, password: 'temporary12345' });
     assert.equal(created.status, 200);
@@ -80,9 +84,66 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   const settings = (await admin('/api/supervision-management')).data;
   const [groupA, groupB] = settings.groups;
   const cs = '计算机科学与技术', ai = '人工智能', iot = '物联网工程';
+  for (const username of ['head', 'head-ai', 'head-iot']) {
+    const me = (await users[username].request('/api/auth/me')).data.user;
+    assert.equal(me.college_role, 'program');
+    assert.deepEqual(me.program_scopes, []);
+    const overview = await users[username].request('/api/supervision/progress');
+    assert.equal(overview.status, 200);
+    assert.equal(overview.data.view, 'program');
+    assert.deepEqual(overview.data.views, username === 'head-ai' ? ['program', 'group'] : ['program']);
+    assert.equal(overview.data.summary.required, 0);
+    assert.deepEqual(overview.data.rows, []);
+    assert.equal((await users[username].request('/api/supervision/progress?view=college')).status, 403);
+  }
+  database.prepare("UPDATE users SET college_role = 'none' WHERE id = ?").run(users.head.id);
+  database.prepare('DELETE FROM program_leader_scopes WHERE user_id = ?').run(users.head.id);
+  database.prepare('INSERT INTO program_leader_scopes (user_id,professional) VALUES (?,?)').run(users['head-ai'].id, '计算机公共教学');
+  database.prepare("DELETE FROM settings WHERE key = 'professional_views_initialized'").run();
+  const migrated = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+    cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(migrated.status, 0, migrated.stderr);
+  const upgraded = (await head('/api/auth/me')).data.user;
+  assert.equal(upgraded.college_role, 'program');
+  assert.deepEqual(upgraded.program_scopes, []);
+  assert.deepEqual((await users['head-ai'].request('/api/auth/me')).data.user.program_scopes, ['计算机公共教学']);
+  const groupRoster = new FormData();
+  groupRoster.append('file', new Blob(['姓名,工号\n李婷婷,preset-public']), 'group-leaders.csv');
+  assert.equal((await admin('/api/admin/users/import', groupRoster)).data.imported, 1);
+  const presetNames = ['刘正涛', '王辉', '张文哲', '尼洪涛', '曹金华', '唐灯平', '纪其进', '李婷婷'];
+  const defaultGroups = (await admin('/api/supervision-management')).data;
+  for (let i = 0; i < presetNames.length; i++) {
+    assert.deepEqual(defaultGroups.users.find((user) => user.name === presetNames[i]).led_groups, [settings.groups[i]]);
+  }
+  database.exec('DELETE FROM course_group_leaders');
+  database.prepare('INSERT INTO course_group_leaders (course_group,user_id) VALUES (?,?)').run(groupA, aliceId);
+  database.prepare('INSERT INTO course_group_leaders (course_group,user_id) VALUES (?,?)').run(settings.groups[4], users['preset-code'].id);
+  database.prepare("DELETE FROM settings WHERE key = 'course_group_views_initialized'").run();
+  const groupMigrated = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+    cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(groupMigrated.status, 0, groupMigrated.stderr);
+  const upgradedGroups = (await admin('/api/supervision-management')).data;
+  assert.deepEqual(upgradedGroups.users.find((user) => user.id === aliceId).led_groups, [groupA], 'Upgrade preserves a group manually assigned to another account');
+  assert.deepEqual(upgradedGroups.users.find((user) => user.id === users['preset-code'].id).led_groups, [settings.groups[4]], 'Upgrade preserves a preset leader\'s manually selected scope');
+  assert.deepEqual(upgradedGroups.users.find((user) => user.id === users['head-ai'].id).led_groups, []);
+  assert.deepEqual(upgradedGroups.users.find((user) => user.id === users['preset-algorithm'].id).led_groups, [settings.groups[2]]);
+  for (const index of [3, 5, 6, 7]) {
+    assert.deepEqual(upgradedGroups.users.find((user) => user.name === presetNames[index]).led_groups, [settings.groups[index]]);
+  }
+  assert.equal((await admin(`/api/supervision-management/users/${users['preset-algorithm'].id}`, {
+    college_role: 'none', led_groups: [], program_scopes: [],
+  }, 'PUT')).status, 200);
+  const restarted = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+    cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(restarted.status, 0, restarted.stderr);
+  assert.deepEqual((await users['preset-algorithm'].request('/api/auth/me')).data.user.led_groups, [], 'Restart does not restore a revoked default course group');
   const configure = (request, username, patch) => request(`/api/supervision-management/users/${users[username].id}`, {
     college_role: 'none', led_groups: [], program_scopes: [], ...patch,
   }, 'PUT');
+  assert.equal((await configure(admin, 'alice', {})).status, 200);
   assert.equal((await configure(admin, 'tang', { college_role: 'teaching', supervision_manager: 1 })).status, 200);
   assert.equal((await tang('/api/supervision-management')).status, 200);
   assert.equal((await tang('/api/admin/users')).status, 403);
@@ -90,6 +151,8 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal((await configure(tang, 'leader', { led_groups: [groupA] })).status, 200);
   assert.equal((await configure(tang, 'other-leader', { led_groups: [groupB] })).status, 200);
   assert.equal((await configure(tang, 'head', { college_role: 'program', program_scopes: [cs] })).status, 200);
+  assert.equal((await configure(admin, 'head-ai', { college_role: 'program', program_scopes: [ai] })).status, 200);
+  assert.equal((await configure(admin, 'head-iot', { college_role: 'program', program_scopes: [iot] })).status, 200);
   assert.equal((await configure(admin, 'empty-head', { college_role: 'program' })).status, 200);
   assert.equal((await configure(admin, 'dual', { college_role: 'teaching', led_groups: [groupB], program_scopes: [ai] })).status, 200);
   assert.equal((await configure(tang, 'bob', { supervision_manager: 1 })).status, 403);
@@ -116,6 +179,12 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal(imported.status, 200);
   assert.equal(imported.data.required, 6);
   assert.equal(imported.data.unassigned, 1);
+  for (const [username, professional, required] of [['head', cs, 2], ['head-ai', ai, 3], ['head-iot', iot, 1]]) {
+    const overview = await users[username].request('/api/supervision/progress');
+    assert.equal(overview.status, 200);
+    assert.equal(overview.data.summary.required, required);
+    assert.ok(overview.data.rows.every((row) => row.professional === professional));
+  }
   assert.ok(imported.data.warnings.some((warning) => warning.includes('未建号执笔人')));
   assert.equal((await importSource(alice)).status, 403);
   let managed = (await admin('/api/supervision-management')).data;
@@ -149,17 +218,17 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   const file = Buffer.from('Syllabus test fixture');
   writeFileSync(path.join(dataDir, 'seed.docx'), file);
   const checklistId = database.prepare('SELECT id FROM checklist_versions WHERE is_active = 1').get().id;
-  function seed(userId, courseName, major, verdict = 'passed') {
+  function seed(userId, courseName, major, verdict = 'passed', requirementId = null) {
     const courseId = Number(database.prepare("INSERT INTO courses (user_id,name,major,training_type,student_grade) VALUES (?,?,?,'普通本科',2025)").run(userId, courseName, major).lastInsertRowid);
     const snapshot = JSON.stringify({ name: courseName, major, trainingType: '普通本科', studentGrade: 2025, planGrade: 2025, adjustNote: '' });
     return Number(database.prepare(`INSERT INTO submissions
-      (course_id,user_id,seq,file_name,file_path,file_size,extracted_text,checklist_version_id,course_snapshot,status,verdict,result_json,finished_at)
-      VALUES (?,?,1,'seed.docx','seed.docx',?,'Syllabus test fixture',?,?,'done',?,?,datetime('now','localtime'))`)
-      .run(courseId, userId, file.length, checklistId, snapshot, verdict, JSON.stringify({ summary: 'Reviewable', itemResults: [], issues: [], toVerify: [] })).lastInsertRowid);
+      (course_id,user_id,seq,file_name,file_path,file_size,extracted_text,checklist_version_id,course_snapshot,status,verdict,result_json,finished_at,outline_requirement_id)
+      VALUES (?,?,1,'seed.docx','seed.docx',?,'Syllabus test fixture',?,?,'done',?,?,datetime('now','localtime'),?)`)
+      .run(courseId, userId, file.length, checklistId, snapshot, verdict, JSON.stringify({ summary: 'Reviewable', itemResults: [], issues: [], toVerify: [] }), requirementId).lastInsertRowid);
   }
   const first = seed(aliceId, '计算机基础', cs);
   const outside = seed(bobId, '人工智能导论', ai);
-  seed(bobId, '计算机基础', ai);
+  const sameTitleAI = seed(bobId, '计算机基础', ai);
   let mine = (await alice('/api/progress')).data;
   assert.deepEqual([mine.uploaded, mine.required, mine.passed], [1, 2, 1]);
   assert.deepEqual((await alice(`/api/progress?userId=${bobId}`)).data, mine);
@@ -182,6 +251,12 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal((await head(`/api/submissions/${first}/confirm`, {})).status, 403);
   assert.equal((await tang(`/api/submissions/${first}/confirm`, {})).status, 403);
   seed(aliceId, '数据结构', cs);
+  const legacyOtherUploader = seed(bobId, '数据结构', cs);
+  const legacyWriterCourse = (await alice('/api/progress')).data.courses.find((course) => course.course_name === '数据结构');
+  assert.equal(legacyWriterCourse.latest_id, legacyOtherUploader, 'A unique legacy course is credited regardless of who uploaded it');
+  assert.equal(legacyWriterCourse.uploader_id, bobId);
+  assert.equal((await alice(`/api/submissions/${legacyOtherUploader}`)).status, 200);
+  assert.equal((await alice(`/api/submissions/${legacyOtherUploader}/confirm`, {})).status, 403, 'Being the assigned writer alone does not grant confirmation permission');
   assert.equal((await alice('/api/progress')).data.passed, 2);
   assert.equal((await admin('/api/admin/progress')).data.summary.passed, 2);
   const confirmed = await leader(`/api/submissions/${first}/confirm`, {});
@@ -196,6 +271,8 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.deepEqual([latestGroup.uploaded, latestGroup.passed, latestGroup.confirmed], [3, 2, 0]);
   assert.equal((await admin('/api/admin/progress')).data.summary.confirmedOutlines, 0);
   assert.equal((await leader(`/api/submissions/${first}/confirm`, {})).status, 403);
+  assert.equal((await alice(`/api/submissions/${first}/confirm`, {})).status, 200);
+  assert.equal((await alice('/api/progress')).data.confirmed, 0, 'Confirming an uploader\'s historical result does not confirm the latest course version');
   assert.equal((await otherLeader(`/api/submissions/${latest}`)).status, 404);
   assert.equal((await leader(`/api/submissions/${latest}/confirm`, {})).status, 200);
   assert.equal((await alice('/api/progress')).data.confirmed, 1);
@@ -210,9 +287,14 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   mine = (await alice('/api/progress')).data;
   assert.deepEqual([mine.required, mine.uploaded], [1, 1]);
   const reassigned = (await bob('/api/progress')).data;
-  assert.deepEqual([reassigned.required, reassigned.uploaded], [3, 2]);
-  assert.equal(reassigned.courses.find((course) => course.id === foundation.id).latest_id, null, 'Same course title in another professional cannot satisfy the reassigned outline');
-  assert.equal((await leader(`/api/submissions/${latest}`)).status, 404);
+  assert.deepEqual([reassigned.required, reassigned.uploaded], [3, 3]);
+  const reassignedCourse = reassigned.courses.find((course) => course.id === foundation.id);
+  assert.equal(reassignedCourse.latest_id, latest, 'Reassigning the writer keeps the uploaded course and its history');
+  assert.equal(reassignedCourse.uploader_id, aliceId);
+  assert.equal(reassigned.courses.find((course) => course.course_name === '计算机基础' && course.professional === ai).latest_id, sameTitleAI);
+  assert.equal((await leader(`/api/submissions/${latest}`)).status, 200);
+  assert.equal((await bob(`/api/submissions/${latest}`)).status, 200);
+  assert.equal((await bob(`/api/submissions/${latest}/confirm`, {})).status, 403);
   const transferredSubmission = seed(bobId, '计算机基础', cs);
   assert.equal((await head(`/api/submissions/${transferredSubmission}`)).status, 200);
   assert.equal((await bob('/api/progress')).data.uploaded, 3);
@@ -223,6 +305,88 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal(managed.requirements.find((r) => r.id === foundation.id).user_id, bobId);
   assert.equal(managed.requirements.find((r) => r.id === unmatched.id).user_id, aliceId);
   assert.equal(managed.requirements.length, 6);
+  const mock = http.createServer(async (req, res) => {
+    for await (const _chunk of req) { /* Drain the provider request. */ }
+    const items = database.prepare('SELECT code FROM checklist_items WHERE version_id = ?').all(checklistId);
+    const result = { summary: 'Course upload test', itemResults: items.map(({ code }) => ({ code, result: '未发现问题', note: '' })), issues: [], toVerify: [] };
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ model: 'mock', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(result) } }] }));
+  });
+  mock.listen(0, '127.0.0.1');
+  await once(mock, 'listening');
+  t.after(() => new Promise((resolve) => mock.close(resolve)));
+  assert.equal((await admin('/api/admin/ai', { provider: 'openai', baseUrl: `http://127.0.0.1:${mock.address().port}/v1`, apiKey: 'test-only', model: 'mock' }, 'PUT')).status, 200);
+  const syllabus = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('Course objectives, teaching content and assessment rules. '.repeat(12))] }] }));
+  const upload = (request, name, major, requirementId) => {
+    const form = new FormData();
+    for (const [key, value] of Object.entries({ name, major, trainingType: '普通本科', studentGrade: 2025, planGrade: 2025 })) form.append(key, String(value));
+    if (requirementId !== undefined) form.append('outlineRequirementId', String(requirementId));
+    form.append('file', new Blob([syllabus]), 'course-outline.docx');
+    return request('/api/submissions', form);
+  };
+  const finish = async (submissionId) => {
+    for (let i = 0; i < 150; i++) {
+      const row = database.prepare('SELECT status,error FROM submissions WHERE id = ?').get(submissionId);
+      if (row.status === 'done') return;
+      assert.notEqual(row.status, 'failed', row.error);
+      await delay(20);
+    }
+    assert.fail(`Submission ${submissionId} did not complete`);
+  };
+  const beforeUnassigned = (await alice('/api/progress')).data;
+  const firstUnassigned = await upload(alice, '机器学习', ai);
+  assert.equal(firstUnassigned.status, 200);
+  await finish(firstUnassigned.data.submissionId);
+  assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(firstUnassigned.data.submissionId).outline_requirement_id, unassigned.id, 'An unambiguous course automatically binds without requiring a writer');
+  const firstUnassignedRow = (await otherLeader('/api/supervision/progress?view=group')).data.rows.find((row) => row.id === unassigned.id);
+  assert.equal(firstUnassignedRow.user_id, null);
+  assert.equal(firstUnassignedRow.uploader_id, aliceId);
+  assert.equal(firstUnassignedRow.latest_id, firstUnassigned.data.submissionId);
+  assert.deepEqual((await alice('/api/progress')).data, beforeUnassigned, 'Uploading an unassigned course does not create a personal writer assignment');
+  assert.equal((await otherLeader(`/api/submissions/${firstUnassigned.data.submissionId}`)).status, 200);
+  assert.equal((await otherLeader(`/api/submissions/${firstUnassigned.data.submissionId}/confirm`, {})).status, 200);
+  assert.equal((await leader(`/api/submissions/${firstUnassigned.data.submissionId}`)).status, 404);
+  const uploadedBeforeRevision = (await admin('/api/admin/progress')).data.summary.uploadedOutlines;
+  const revisedUnassigned = await upload(bob, '机器学习', ai, unassigned.id);
+  assert.equal(revisedUnassigned.status, 200);
+  await finish(revisedUnassigned.data.submissionId);
+  const revisedRow = (await otherLeader('/api/supervision/progress?view=group')).data.rows.find((row) => row.id === unassigned.id);
+  assert.equal(revisedRow.latest_id, revisedUnassigned.data.submissionId);
+  assert.equal(revisedRow.uploader_id, bobId);
+  assert.equal(revisedRow.confirmed_at, null);
+  assert.equal((await admin('/api/admin/progress')).data.summary.uploadedOutlines, uploadedBeforeRevision, 'A new uploader/version does not count the course twice');
+  assert.equal((await otherLeader(`/api/submissions/${firstUnassigned.data.submissionId}/confirm`, {})).status, 403);
+  assert.equal((await otherLeader(`/api/submissions/${revisedUnassigned.data.submissionId}/confirm`, {})).status, 200);
+  const ambiguousCsv = `${csv}\n交叉课程,${groupA},${cs},,\n交叉课程,${groupB},${cs},,`;
+  assert.equal((await importSource(admin, ambiguousCsv)).status, 200);
+  managed = (await admin('/api/supervision-management')).data;
+  const ambiguous = managed.requirements.filter((row) => row.course_name === '交叉课程');
+  assert.equal(ambiguous.length, 2);
+  const legacyAmbiguous = seed(aliceId, '交叉课程', cs);
+  assert.ok((await admin('/api/supervision-management')).data.requirements.filter((row) => row.course_name === '交叉课程').every((row) => row.latest_id === null), 'An ambiguous legacy upload is not credited to either course group');
+  assert.equal((await leader(`/api/submissions/${legacyAmbiguous}`)).status, 404);
+  assert.equal((await upload(admin, '交叉课程', cs)).status, 400);
+  const selectedCourse = ambiguous.find((row) => row.course_group === groupA);
+  assert.equal((await upload(admin, '其他课程', cs, selectedCourse.id)).status, 400);
+  assert.equal((await upload(admin, '交叉课程', ai, selectedCourse.id)).status, 400);
+  const options = (await admin('/api/options')).data.outlineCourses;
+  assert.equal(options.length, 8);
+  assert.equal(options.filter((course) => course.name === '交叉课程').length, 2);
+  const bound = await upload(admin, '交叉课程', cs, selectedCourse.id);
+  assert.equal(bound.status, 200);
+  await finish(bound.data.submissionId);
+  const boundRows = (await admin('/api/supervision-management')).data.requirements.filter((row) => row.course_name === '交叉课程');
+  assert.equal(boundRows.find((row) => row.id === selectedCourse.id).latest_id, bound.data.submissionId);
+  assert.equal(boundRows.find((row) => row.id !== selectedCourse.id).latest_id, null);
+  assert.equal((await leader(`/api/submissions/${bound.data.submissionId}/confirm`, {})).status, 200);
+  assert.equal((await otherLeader(`/api/submissions/${bound.data.submissionId}`)).status, 404);
+  const beforeOutside = (await admin('/api/admin/progress')).data.summary.uploadedOutlines;
+  const outsideSource = await upload(admin, '不在应交名单的课程', ai);
+  assert.equal(outsideSource.status, 200);
+  await finish(outsideSource.data.submissionId);
+  assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(outsideSource.data.submissionId).outline_requirement_id, null);
+  assert.equal((await admin('/api/admin/progress')).data.summary.uploadedOutlines, beforeOutside);
+  managed = (await admin('/api/supervision-management')).data;
   const beforeLegacy = managed;
   assert.equal((await admin('/api/admin/progress/import', {})).status, 400);
   assert.deepEqual((await admin('/api/supervision-management')).data, beforeLegacy);
@@ -234,4 +398,13 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal((await configure(admin, 'head', { college_role: 'program' })).status, 200);
   assert.equal((await head('/api/supervision/progress?view=program')).data.summary.required, 0);
   assert.equal((await head(`/api/submissions/${transferredSubmission}`)).status, 404);
+  assert.equal((await configure(admin, 'head', {})).status, 200);
+  const professionalRestart = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+    cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(professionalRestart.status, 0, professionalRestart.stderr);
+  const revokedProfessional = (await head('/api/auth/me')).data.user;
+  assert.equal(revokedProfessional.college_role, 'none', 'Restart does not restore a revoked default professional identity');
+  assert.deepEqual(revokedProfessional.program_scopes, []);
+  assert.equal((await head('/api/supervision/progress?view=program')).status, 403);
 });
