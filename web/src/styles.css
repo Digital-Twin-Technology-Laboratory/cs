@@ -70,6 +70,10 @@ body {
 .responsive-table .ant-tag {
   white-space: normal;
 }
+.responsive-table .submission-verdict,
+.responsive-table .submission-verdict .ant-tag {
+  white-space: nowrap;
+}
 .responsive-table .ant-pagination {
   flex-wrap: wrap;
   padding-inline: 12px;

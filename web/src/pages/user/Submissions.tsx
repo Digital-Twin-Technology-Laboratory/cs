@@ -47,8 +47,8 @@ export default function Submissions() {
     setPage(1);
     setFilters((prev) => ({ ...prev, ...patch }));
   };
-  const editField = (row: Row, field: 'course_name' | 'major' | 'student_grade' | 'file_name' | 'verdict', value: string, children: React.ReactNode, options?: { value: string; label: string }[]) =>
-    <EditableText value={value} name={`${field}-${row.id}`} options={options} disabled={row.status === 'queued' || row.status === 'running' || (field === 'verdict' && row.status !== 'done')}
+  const editField = (row: Row, field: 'course_name' | 'major' | 'student_grade' | 'file_name', value: string, children: React.ReactNode, options?: { value: string; label: string }[]) =>
+    <EditableText value={value} name={`${field}-${row.id}`} options={options} disabled={row.status === 'queued' || row.status === 'running'}
       onSave={async (next) => { await api.put(`/api/submissions/${row.id}`, { [field]: field === 'student_grade' ? Number(next) : next }); await load(); }}>{children}</EditableText>;
 
   return (
@@ -105,7 +105,19 @@ export default function Submissions() {
             ...(scope === 'college' ? [{ title: '上传人', width: 150, render: (_: unknown, row: Row) => <div>{row.user_name}<div className="muted small">{row.username}</div></div> }] : []),
             { title: '次数', dataIndex: 'seq', width: 75, render: (seq, row) => <EditableNumber name={`上传次数-${row.id}`} value={seq} min={1} editable={canEditRecords} format={(n) => `第${n}次`} onSave={async (next) => { await api.put(`/api/submissions/${row.id}/sequence`, { seq: next }); await load(); }} /> },
             { title: '文件', dataIndex: 'file_name', width: 210, ellipsis: true, render: (name, row) => editField(row, 'file_name', name, <Tooltip title={name}>{name} <span className="muted small">{fmtSize(row.file_size)}</span></Tooltip>) },
-            { title: '检查结果', width: 115, render: (_, row) => editField(row, 'verdict', row.verdict ?? '', <SubmissionTag status={row.status} verdict={row.verdict} />, [{ value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }]) },
+            {
+              title: '检查结果', width: 180, className: 'submission-verdict',
+              render: (_, row) => canEditRecords && row.status === 'done' ? (
+                <Select aria-label={`检查结果-${row.id}`} value={row.verdict} style={{ width: 112 }} disabled={loading}
+                  options={[{ value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }]}
+                  onChange={async (verdict) => {
+                    setLoading(true);
+                    try { await api.put(`/api/submissions/${row.id}`, { verdict }); await load(); }
+                    catch (e) { message.error((e as Error).message); }
+                    finally { setLoading(false); }
+                  }} />
+              ) : <SubmissionTag status={row.status} verdict={row.verdict} />,
+            },
             { title: '结果上传状态', width: 165, render: (_, row) => <><ConfirmationTag confirmedAt={row.confirmed_at} status={row.status} />{row.confirmed_at && <div className="muted small">{row.confirmed_at}</div>}</> },
             { title: '文件上传时间', dataIndex: 'created_at', width: 170 },
             {
