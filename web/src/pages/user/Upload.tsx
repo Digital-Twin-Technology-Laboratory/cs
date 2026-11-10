@@ -1,4 +1,4 @@
-import { Alert, App, AutoComplete, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag, Upload as AntUpload } from 'antd';
+import { Alert, App, AutoComplete, Button, Card, Form, Input, Select, Space, Tag, Upload as AntUpload } from 'antd';
 import Table from '../../components/ResponsiveTable';
 import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
@@ -9,9 +9,7 @@ import { useAuth } from '../../auth';
 import type { CourseInfo, Options } from '../../types';
 
 interface UploadValues {
-  trainingType: string;
   planGrade: number;
-  adjustNote?: string;
   outlines: Record<string, Pick<CourseInfo, 'name' | 'major' | 'studentGrade'> & { outlineRequirementId?: number }>;
 }
 
@@ -29,15 +27,11 @@ export default function Upload() {
   const [results, setResults] = useState<Record<string, UploadResult>>({});
   const [submitting, setSubmitting] = useState(false);
   const [activeUid, setActiveUid] = useState<string | null>(null);
-  const planGrade = Form.useWatch('planGrade', form);
   const pendingCount = files.filter((file) => !results[file.uid]?.submissionId).length;
 
   useEffect(() => {
-    api.get<Options>('/api/options').then((r) => {
-      setOptions(r);
-      form.setFieldValue('trainingType', r.trainingTypes[0]);
-    }).catch((e) => message.error(e.message));
-  }, [form, message]);
+    api.get<Options>('/api/options').then(setOptions).catch((e) => message.error(e.message));
+  }, [message]);
 
   const submit = async (values: UploadValues) => {
     const pending = files.filter((file) => !results[file.uid]?.submissionId);
@@ -51,7 +45,7 @@ export default function Upload() {
       for (const file of pending) {
         setActiveUid(file.uid);
         const fd = new FormData();
-        const fields = { ...values.outlines[file.uid], trainingType: values.trainingType, planGrade: values.planGrade, adjustNote: values.adjustNote ?? '' };
+        const fields = { ...values.outlines[file.uid], planGrade: values.planGrade };
         Object.entries(fields).forEach(([key, value]) => { if (value !== undefined) fd.append(key, String(value)); });
         fd.append('file', file.originFileObj!);
         try {
@@ -101,23 +95,10 @@ export default function Upload() {
           initialValues={{ planGrade: 2025 }}
           onFinish={submit}
         >
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item label="培养类型（应用于待上传大纲）" name="trainingType" rules={[{ required: true, message: '请选择培养类型' }]}>
-                <Select options={(options?.trainingTypes ?? []).map((t) => ({ value: t, label: t }))} placeholder="请选择培养类型" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item label="对照方案年级" name="planGrade" rules={[{ required: true, message: '请填写对照方案年级' }]} extra="本轮统一以2025级人才培养方案为对照起点，与学生年级分开选择">
-                <InputNumber min={2000} max={new Date().getFullYear() + 5} suffix="级" style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
-          {planGrade !== undefined && planGrade !== 2025 && (
-            <Form.Item label="对照方案调整说明" name="adjustNote" rules={[{ required: true, whitespace: true, message: '对照方案年级不是2025级时，请说明原因' }]}>
-              <Input.TextArea rows={2} maxLength={500} />
-            </Form.Item>
-          )}
+          <Form.Item label="人才培养方案年级（应用于待上传大纲）" name="planGrade" rules={[{ required: true, message: '请选择人才培养方案年级' }]}
+            extra="默认使用2025级人才培养方案，与下方学生年级分开选择。" style={{ maxWidth: 480 }}>
+            <Select aria-label="人才培养方案年级" options={(options?.studentGrades ?? []).map((year) => ({ value: year, label: `${year}级` }))} />
+          </Form.Item>
           <Form.Item label="教学大纲文件" required extra={`支持 .docx、.pdf，单个文件不超过 ${options?.maxUploadMB ?? 20}MB。每次上传独立检查，不与以往记录对比。`}>
             <AntUpload.Dragger
               accept=".docx,.pdf"
@@ -156,14 +137,14 @@ export default function Upload() {
                     <>
                       <Form.Item name={['outlines', file.uid, 'outlineRequirementId']} hidden preserve={false}><Input type="hidden" /></Form.Item>
                       <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
-                        <AutoComplete options={(options?.outlineCourses ?? []).map((c) => ({
+                        <AutoComplete options={(options?.outlineCourses ?? []).filter((c) => options?.majors.includes(c.professional) || c.professional === '专转本').map((c) => ({
                           key: c.id, value: `${c.name}（${c.professional || '未配置专业'} / ${c.course_group || '未分组'}）`,
                           name: c.name, professional: c.professional, requirementId: c.id,
                         }))}
                           onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)}
                           onSelect={(_, option) => form.setFields([
                             { name: ['outlines', file.uid, 'name'], value: option.name },
-                            { name: ['outlines', file.uid, 'major'], value: option.professional },
+                            { name: ['outlines', file.uid, 'major'], value: option.professional === '专转本' ? '计算机科学与技术（专转本）' : option.professional },
                             { name: ['outlines', file.uid, 'outlineRequirementId'], value: option.requirementId },
                           ])}
                           filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
@@ -182,7 +163,7 @@ export default function Upload() {
                   ),
                 },
                 {
-                  title: '专业', width: 210,
+                  title: '专业', width: 260,
                   render: (_: unknown, file: UploadFile) => (
                     <Form.Item name={['outlines', file.uid, 'major']} rules={[{ required: true, message: '请选择专业' }]} style={{ marginBottom: 0 }} preserve={false}>
                       <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />

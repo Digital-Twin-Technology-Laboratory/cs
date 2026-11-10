@@ -5,8 +5,6 @@ const thisYear = new Date().getFullYear();
 
 /** 课程信息表单项：学生年级与对照方案年级分开填写，对照方案默认2025级 */
 export default function CourseFields({ options }: { options: Options | null }) {
-  const form = Form.useFormInstance();
-  const planGrade = Form.useWatch('planGrade', form);
   return (
     <>
       <Form.Item label="课程名称" name="name" rules={[{ required: true, message: '请填写课程名称' }]}>
@@ -44,14 +42,6 @@ export default function CourseFields({ options }: { options: Options | null }) {
           </Form.Item>
         </Col>
       </Row>
-      <Form.Item
-        label="对照方案调整说明"
-        name="adjustNote"
-        rules={[{ required: planGrade !== undefined && planGrade !== 2025, message: '对照方案年级不是2025级时，请说明原因' }]}
-        extra={planGrade !== 2025 ? '对照方案年级已调整，请说明原因' : '对照方案为2025级时可不填'}
-      >
-        <Input.TextArea rows={2} maxLength={500} placeholder="如：该课程仅面向2024级学生开设，按2024级方案核对" />
-      </Form.Item>
     </>
   );
 }

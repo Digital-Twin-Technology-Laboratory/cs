@@ -317,9 +317,11 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   t.after(() => new Promise((resolve) => mock.close(resolve)));
   assert.equal((await admin('/api/admin/ai', { provider: 'openai', baseUrl: `http://127.0.0.1:${mock.address().port}/v1`, apiKey: 'test-only', model: 'mock' }, 'PUT')).status, 200);
   const syllabus = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('Course objectives, teaching content and assessment rules. '.repeat(12))] }] }));
-  const upload = (request, name, major, requirementId) => {
+  const upload = (request, name, major, requirementId, trainingType, planGrade = 2025) => {
     const form = new FormData();
-    for (const [key, value] of Object.entries({ name, major, trainingType: '普通本科', studentGrade: 2025, planGrade: 2025 })) form.append(key, String(value));
+    for (const [key, value] of Object.entries({ name, major, trainingType, studentGrade: 2025, planGrade })) {
+      if (value !== undefined) form.append(key, String(value));
+    }
     if (requirementId !== undefined) form.append('outlineRequirementId', String(requirementId));
     form.append('file', new Blob([syllabus]), 'course-outline.docx');
     return request('/api/submissions', form);
@@ -407,4 +409,97 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal(revokedProfessional.college_role, 'none', 'Restart does not restore a revoked default professional identity');
   assert.deepEqual(revokedProfessional.program_scopes, []);
   assert.equal((await head('/api/supervision/progress?view=program')).status, 403);
+
+  await t.test('four upload majors use the selected 2023-2026 plan without a training-type selector', async () => {
+    const transferMajor = '计算机科学与技术（专转本）';
+    const options = (await admin('/api/options')).data;
+    assert.deepEqual(options.majors, [cs, transferMajor, iot, ai]);
+    assert.deepEqual(options.studentGrades, [2023, 2024, 2025, 2026]);
+    assert.ok((await admin('/api/supervision-management')).data.programs.includes(transferMajor));
+    for (const grade of options.studentGrades) {
+      for (const type of ['普通本科', '专转本']) {
+        database.prepare('INSERT INTO training_plans (major,training_type,grade,name,extracted_text) VALUES (?,?,?,?,?)')
+          .run(cs, type, grade, `${grade}-${type}`, 'Training plan test fixture');
+      }
+      for (const [major, type] of [[cs, '普通本科'], [transferMajor, '专转本']]) {
+        const query = new URLSearchParams({ major, trainingType: '普通本科', grade: String(grade) });
+        const matched = await admin(`/api/plan-match?${query}`);
+        assert.equal(matched.status, 200);
+        assert.equal(matched.data.plan.name, `${grade}-${type}`);
+      }
+    }
+    const requirementId = Number(database.prepare('INSERT INTO outline_requirements (source_key,course_name,course_group,professional) VALUES (?,?,?,?)')
+      .run('legacy-transfer-course', '专转本课程', groupA, '专转本').lastInsertRowid);
+    const uploaded = await upload(admin, '专转本课程', transferMajor, undefined, undefined, 2024);
+    assert.equal(uploaded.status, 200);
+    assert.equal(uploaded.data.planFound, true);
+    await finish(uploaded.data.submissionId);
+    const detail = (await admin(`/api/submissions/${uploaded.data.submissionId}`)).data.submission;
+    assert.equal(detail.course.major, transferMajor);
+    assert.equal(detail.course.trainingType, '专转本');
+    assert.equal(detail.course.planGrade, 2024);
+    assert.equal(detail.course.adjustNote, '');
+    assert.equal(detail.plan_name, '2024-专转本');
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(detail.id).outline_requirement_id, requirementId);
+    database.prepare('UPDATE courses SET adjust_note = ? WHERE id = ?').run('Historical plan note', uploaded.data.courseId);
+    for (const planGrade of options.studentGrades) {
+      assert.equal((await admin(`/api/courses/${uploaded.data.courseId}`, {
+        name: '专转本课程', major: transferMajor, studentGrade: 2025, planGrade,
+      }, 'PUT')).status, 200);
+      const current = (await admin(`/api/courses/${uploaded.data.courseId}`)).data;
+      assert.equal(current.plan.name, `${planGrade}-专转本`);
+      assert.equal(current.course.adjust_note, 'Historical plan note');
+    }
+    for (const planGrade of [2022, 2027]) {
+      assert.equal((await admin(`/api/courses/${uploaded.data.courseId}`, {
+        name: '专转本课程', major: transferMajor, studentGrade: 2025, planGrade,
+      }, 'PUT')).status, 400);
+    }
+    const ordinary = await upload(admin, '普通本科课程', cs, undefined, undefined, 2024);
+    assert.equal(ordinary.status, 200);
+    await finish(ordinary.data.submissionId);
+    const ordinaryDetail = (await admin(`/api/submissions/${ordinary.data.submissionId}`)).data.submission;
+    assert.equal(ordinaryDetail.course.trainingType, '普通本科');
+    assert.equal(ordinaryDetail.plan_name, '2024-普通本科');
+  });
+
+  await t.test('teaching staff can read all results, including uploads outside the cloud course list', async () => {
+    assert.equal((await client()('/api/submissions?scope=college')).status, 401);
+    for (const request of [bob, emptyHead, otherLeader]) {
+      assert.equal((await request('/api/submissions?scope=college')).status, 403);
+    }
+    assert.equal((await admin(`/api/admin/users/${bobId}`, { college_role: 'teaching' }, 'PUT')).status, 200);
+    assert.equal((await bob('/api/auth/me')).data.user.college_role, 'teaching');
+    const allIds = database.prepare('SELECT id FROM submissions ORDER BY id DESC').all().map((row) => row.id);
+    const ownIds = database.prepare('SELECT id FROM submissions WHERE user_id = ? ORDER BY id DESC').all(bobId).map((row) => row.id);
+    assert.deepEqual((await bob('/api/submissions?pageSize=200')).data.rows.map((row) => row.id), ownIds);
+    for (const request of [admin, bob]) {
+      const result = await request('/api/submissions?scope=college&pageSize=200');
+      assert.equal(result.status, 200);
+      assert.equal(result.data.total, allIds.length);
+      assert.deepEqual(result.data.rows.map((row) => row.id), allIds);
+      const outsideRow = result.data.rows.find((row) => row.id === outsideSource.data.submissionId);
+      assert.equal(outsideRow.username, 'root');
+      assert.equal(outsideRow.user_name, 'Root');
+    }
+    const secondPage = (await bob('/api/submissions?scope=college&pageSize=1&page=2')).data;
+    assert.equal(secondPage.total, allIds.length);
+    assert.deepEqual(secondPage.rows.map((row) => row.id), [allIds[1]]);
+    const search = (await bob(`/api/submissions?scope=college&q=${encodeURIComponent('不在应交名单')}&status=done&confirmation=pending`)).data;
+    assert.deepEqual(search.rows.map((row) => row.id), [outsideSource.data.submissionId]);
+    const ownerSearch = (await bob('/api/submissions?scope=college&q=alice&pageSize=200')).data;
+    assert.deepEqual(ownerSearch.rows.map((row) => row.id), database.prepare('SELECT id FROM submissions WHERE user_id = ? ORDER BY id DESC').all(aliceId).map((row) => row.id));
+    for (const suffix of ['', '/file', '/report.txt', '/report.docx']) {
+      assert.equal((await bob(`/api/submissions/${outsideSource.data.submissionId}${suffix}`)).status, 200);
+    }
+    assert.equal((await bob(`/api/submissions/${outsideSource.data.submissionId}`)).data.submission.canConfirm, false);
+    assert.equal((await bob(`/api/submissions/${outsideSource.data.submissionId}/confirm`, {})).status, 403);
+    assert.equal((await bob(`/api/submissions/${outsideSource.data.submissionId}/recheck`, {})).status, 403);
+    assert.equal((await bob('/api/admin/submissions')).status, 403);
+    assert.equal((await admin(`/api/admin/users/${bobId}`, { college_role: 'none' }, 'PUT')).status, 200);
+    assert.equal((await bob('/api/submissions?scope=college')).status, 403);
+    for (const suffix of ['', '/file', '/report.txt', '/report.docx']) {
+      assert.equal((await bob(`/api/submissions/${outsideSource.data.submissionId}${suffix}`)).status, 404);
+    }
+  });
 });

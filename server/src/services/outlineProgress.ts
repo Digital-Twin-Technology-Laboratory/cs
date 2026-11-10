@@ -1,7 +1,7 @@
 import { db } from '../db.js';
 import type { PublicUser } from '../auth.js';
 
-export const PROFESSIONALS = ['计算机科学与技术', '物联网工程', '人工智能', '计算机公共教学', '智能无人机系统与应用（微专业）'];
+export const PROFESSIONALS = ['计算机科学与技术', '物联网工程', '人工智能', '计算机公共教学', '智能无人机系统与应用（微专业）', '计算机科学与技术（专转本）'];
 export type View = 'college' | 'group' | 'program';
 
 export interface OutlineProgressRow {

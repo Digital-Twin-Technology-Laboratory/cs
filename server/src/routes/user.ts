@@ -30,22 +30,17 @@ userRouter.get('/progress', (req, res) => {
   });
 });
 
-const thisYear = new Date().getFullYear();
-const majors = ['计算机科学与技术', '人工智能', '物联网工程', '中外物联网', '物联网工程（合作办学）', '智能无人机系统与应用（微专业）', '计算机公共教学'] as const;
+const majors = ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能'] as const;
+const legacyMajors = ['中外物联网', '物联网工程（合作办学）', '智能无人机系统与应用（微专业）', '计算机公共教学', '专转本'] as const;
 const studentGrades = [2023, 2024, 2025, 2026];
 export const courseSchema = z.object({
   name: z.string().trim().min(1, '请填写课程名称').max(100),
-  major: z.enum(majors, { error: '请选择指定的专业' }),
-  trainingType: z.string().trim().min(1, '请选择培养类型').max(50),
+  major: z.enum([...majors, ...legacyMajors], { error: '请选择指定的专业' }),
+  trainingType: z.string().trim().min(1, '请选择培养类型').max(50).default('普通本科'),
   studentGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择23、24、25或26级'),
-  planGrade: z.coerce.number().int().min(2000).max(thisYear + 5).default(2025),
+  planGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择2023、2024、2025或2026级人才培养方案').default(2025),
   adjustNote: z.string().trim().max(500).default(''),
 });
-
-function checkAdjust(c: z.infer<typeof courseSchema>) {
-  if (c.planGrade !== 2025 && !c.adjustNote) return '对照方案年级不是2025级时，请填写调整说明';
-  return null;
-}
 
 // ---------- 检查清单与选项 ----------
 userRouter.get('/checklist', (_req, res) => {
@@ -153,11 +148,10 @@ userRouter.put('/courses/:id', (req, res) => {
   const c = getOwnCourse(req, res);
   if (!c) return;
   const body = courseSchema.parse(req.body);
-  const err = checkAdjust(body);
-  if (err) return res.status(400).json({ error: err });
+  if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
   db.prepare(
-    "UPDATE courses SET name=?, major=?, training_type=?, student_grade=?, plan_grade=?, adjust_note=?, updated_at=datetime('now','localtime') WHERE id=?",
-  ).run(body.name, body.major, body.trainingType, body.studentGrade, body.planGrade, body.adjustNote, c.id);
+    "UPDATE courses SET name=?, major=?, training_type=?, student_grade=?, plan_grade=?, updated_at=datetime('now','localtime') WHERE id=?",
+  ).run(body.name, body.major, body.trainingType, body.studentGrade, body.planGrade, c.id);
   res.json({ ok: true });
 });
 
@@ -173,12 +167,12 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
     if (!checklistId) return res.status(400).json({ error: '管理员尚未设置生效的检查清单' });
 
     const body = courseSchema.extend({ outlineRequirementId: z.coerce.number().int().positive().optional() }).parse(req.body);
-    const err = checkAdjust(body);
-    if (err) return res.status(400).json({ error: err });
+    if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
 
     const requirements = db.prepare(`SELECT id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
-      AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）'))`)
-      .all(body.name, body.major, body.major) as { id: number }[];
+      AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
+        OR (? = '计算机科学与技术（专转本）' AND professional = '专转本'))`)
+      .all(body.name, body.major, body.major, body.major) as { id: number }[];
     if (body.outlineRequirementId !== undefined && !requirements.some((r) => r.id === body.outlineRequirementId)) {
       return res.status(400).json({ error: '所选应交课程与课程名称、审核专业不一致，请重新选择清单课程' });
     }
@@ -236,7 +230,7 @@ type SubFull = {
 
 function getOwnSub(req: Request, res: Response): SubFull | null {
   const s = db.prepare('SELECT * FROM submissions WHERE id = ?').get(Number(req.params.id)) as SubFull | undefined;
-  if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin' && !supervisesOutlineSubmission(req.user!, s.id))) {
+  if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin' && req.user!.college_role !== 'teaching' && !supervisesOutlineSubmission(req.user!, s.id))) {
     res.status(404).json({ error: '记录不存在' });
     return null;
   }
@@ -244,32 +238,36 @@ function getOwnSub(req: Request, res: Response): SubFull | null {
 }
 
 userRouter.get('/submissions', (req, res) => {
-  const { page, pageSize, q, status, confirmation } = z.object({
+  const { page, pageSize, q, status, confirmation, scope } = z.object({
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(200).default(20),
     q: z.string().trim().max(200).default(''),
     status: z.enum(['queued', 'running', 'done', 'failed']).optional(),
     confirmation: z.enum(['pending', 'confirmed']).optional(),
+    scope: z.enum(['mine', 'college']).default('mine'),
   }).parse(req.query);
-  const where = ['s.user_id = ?'];
-  const args: unknown[] = [req.user!.id];
+  if (scope === 'college' && req.user!.role !== 'admin' && req.user!.college_role !== 'teaching') {
+    return res.status(403).json({ error: '需要教学条线或管理员权限才能查看全院检查记录' });
+  }
+  const where = [scope === 'mine' ? 's.user_id = ?' : '1 = 1'];
+  const args: unknown[] = scope === 'mine' ? [req.user!.id] : [];
   if (q) {
-    where.push("(json_extract(s.course_snapshot, '$.name') LIKE ? OR json_extract(s.course_snapshot, '$.major') LIKE ? OR s.file_name LIKE ?)");
-    args.push(...Array(3).fill(`%${q}%`));
+    where.push("(json_extract(s.course_snapshot, '$.name') LIKE ? OR json_extract(s.course_snapshot, '$.major') LIKE ? OR s.file_name LIKE ? OR u.name LIKE ? OR u.username LIKE ?)");
+    args.push(...Array(5).fill(`%${q}%`));
   }
   if (status) where.push('s.status = ?'), args.push(status);
   if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
   if (confirmation === 'confirmed') where.push('s.confirmed_at IS NOT NULL');
   const w = where.join(' AND ');
-  const total = (db.prepare(`SELECT COUNT(*) AS n FROM submissions s WHERE ${w}`).get(...args) as { n: number }).n;
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM submissions s JOIN users u ON u.id = s.user_id WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db.prepare(
     `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error,
-      s.created_at, s.finished_at, s.confirmed_at,
+      s.created_at, s.finished_at, s.confirmed_at, u.username, u.name AS user_name,
       json_extract(s.course_snapshot, '$.name') AS course_name,
       json_extract(s.course_snapshot, '$.major') AS major,
       json_extract(s.course_snapshot, '$.trainingType') AS training_type,
       json_extract(s.course_snapshot, '$.studentGrade') AS student_grade
-     FROM submissions s WHERE ${w} ORDER BY s.id DESC LIMIT ? OFFSET ?`,
+     FROM submissions s JOIN users u ON u.id = s.user_id WHERE ${w} ORDER BY s.id DESC LIMIT ? OFFSET ?`,
   ).all(...args, pageSize, (page - 1) * pageSize);
   res.json({ total, rows });
 });
