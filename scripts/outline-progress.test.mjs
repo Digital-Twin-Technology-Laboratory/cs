@@ -300,6 +300,10 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal((await bob('/api/progress')).data.uploaded, 3);
   assert.equal((await assignWriter(admin, unmatched, aliceId)).status, 200);
   assert.equal((await alice('/api/progress')).data.required, 2);
+  for (const requirement of [foundation, unmatched]) {
+    database.prepare('UPDATE outline_requirements SET source_key = ? WHERE id = ?')
+      .run(JSON.stringify(JSON.parse(requirement.source_key).slice(0, 3)), requirement.id);
+  }
   assert.equal((await importSource()).status, 200);
   managed = (await admin('/api/supervision-management')).data;
   assert.equal(managed.requirements.find((r) => r.id === foundation.id).user_id, bobId);
@@ -409,6 +413,55 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal(revokedProfessional.college_role, 'none', 'Restart does not restore a revoked default professional identity');
   assert.deepEqual(revokedProfessional.program_scopes, []);
   assert.equal((await head('/api/supervision/progress?view=program')).status, 403);
+
+  await t.test('parallel classes count and track uploads separately for each writer', async () => {
+    for (const userId of [aliceId, bobId]) {
+      assert.equal((await admin(`/api/admin/users/${userId}/check-quota`, { amount: 2 })).status, 200);
+    }
+    const name = '数据库原理与设计';
+    const classes = [
+      `${name},${groupA},${cs},执笔人甲,任课教师甲`,
+      `${name},${groupA},${cs},执笔人乙,任课教师乙`,
+      `${name},${groupA},${cs},执笔人甲,平行班教师丙`,
+    ];
+    assert.equal((await importSource(admin, `${ambiguousCsv}\n${classes[0]}`)).status, 200);
+    const original = (await admin('/api/supervision-management')).data.requirements.find((row) => row.course_name === name);
+    assert.equal((await assignWriter(admin, original, aliceId)).status, 200);
+    const aliceUpload = await upload(alice, name, cs, original.id);
+    assert.equal(aliceUpload.status, 200);
+    await finish(aliceUpload.data.submissionId);
+    database.prepare('UPDATE outline_requirements SET source_key = ? WHERE id = ?')
+      .run(JSON.stringify(JSON.parse(original.source_key).slice(0, 3)), original.id);
+
+    const split = await importSource(admin, `${ambiguousCsv}\n${classes.join('\n')}`);
+    assert.equal(split.status, 200);
+    assert.equal(split.data.required, 10);
+    const requirements = (await admin('/api/supervision-management')).data.requirements.filter((row) => row.course_name === name);
+    assert.equal(requirements.length, 2);
+    const aliceTask = requirements.find((row) => row.user_id === aliceId);
+    const bobTask = requirements.find((row) => row.user_id === bobId);
+    assert.equal(aliceTask.id, original.id);
+    assert.equal(aliceTask.writer_manual, 1);
+    assert.equal(aliceTask.latest_id, aliceUpload.data.submissionId);
+    assert.equal(aliceTask.teacher_names, '任课教师甲、平行班教师丙');
+    assert.equal(bobTask.latest_id, null);
+    const options = (await bob('/api/options')).data.outlineCourses.filter((course) => course.name === name);
+    assert.deepEqual(options.map((course) => course.writer_name).sort(), ['执笔人乙', '执笔人甲'].sort());
+    const ambiguousUpload = await upload(bob, name, cs);
+    assert.equal(ambiguousUpload.status, 400);
+    assert.match(ambiguousUpload.data.error, /多个应交任务/);
+
+    const bobUpload = await upload(bob, name, cs, bobTask.id);
+    assert.equal(bobUpload.status, 200);
+    await finish(bobUpload.data.submissionId);
+    assert.equal((await importSource(admin, `${ambiguousCsv}\n${[...classes].reverse().join('\n')}`)).status, 200);
+    for (const [request, task, submissionId] of [[alice, aliceTask, aliceUpload.data.submissionId], [bob, bobTask, bobUpload.data.submissionId]]) {
+      const courses = (await request('/api/progress')).data.courses.filter((course) => course.course_name === name);
+      assert.equal(courses.length, 1);
+      assert.equal(courses[0].id, task.id);
+      assert.equal(courses[0].latest_id, submissionId);
+    }
+  });
 
   await t.test('four upload majors use the selected 2023-2026 plan without a training-type selector', async () => {
     const transferMajor = '计算机科学与技术（专转本）';

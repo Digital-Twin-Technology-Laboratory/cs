@@ -78,6 +78,23 @@ supervisionManagementRouter.put('/requirements/:id', (req, res) => {
 function importRows(parsed: Awaited<ReturnType<typeof readOutlineFile>>, url: string, user: Express.Request['user'], ip?: string) {
   const warnings = [...parsed.warnings];
   db.transaction(() => {
+    const courses = new Map<string, typeof parsed.rows>();
+    for (const row of parsed.rows) {
+      const key = JSON.stringify(JSON.parse(row.source_key).slice(0, 3));
+      const parallel = courses.get(key) ?? [];
+      parallel.push(row);
+      courses.set(key, parallel);
+    }
+    // Upgrade course-only keys without losing manual assignments or submission bindings.
+    for (const [key, parallel] of courses) {
+      const old = db.prepare('SELECT id, writer_name, writer_identifier FROM outline_requirements WHERE source_key = ?')
+        .get(key) as { id: number; writer_name: string; writer_identifier: string } | undefined;
+      if (!old) continue;
+      const target = parallel.find((row) => old.writer_identifier && row.writer_identifier === old.writer_identifier)
+        ?? parallel.find((row) => old.writer_name && row.writer_name === old.writer_name) ?? parallel[0];
+      db.prepare('UPDATE outline_requirements SET source_key = ? WHERE id = ?').run(target.source_key, old.id);
+      if (parallel.length > 1) warnings.push(`${target.course_name}：已按执笔人拆分，原有记录及手工配置保留在“${target.writer_name || target.writer_identifier || '待分配'}”对应任务，请核对`);
+    }
     const keys = new Set(parsed.rows.map((r) => r.source_key));
     for (const old of db.prepare('SELECT id, source_key FROM outline_requirements').all() as { id: number; source_key: string }[]) {
       if (!keys.has(old.source_key)) db.prepare('DELETE FROM outline_requirements WHERE id = ?').run(old.id);

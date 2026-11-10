@@ -23,8 +23,21 @@ test('outline import merges parallel classes and keeps unassigned outlines', asy
   assert.equal(result.rows[1].writer_name, '');
   assert.equal(result.rows[1].course_group, '');
   assert.equal(result.warnings.length, 1);
-  await writeFile(file.path, header + '课程A,AI基础及应用类课程组,人工智能,张老师,张老师,\n课程A,AI基础及应用类课程组,人工智能,李老师,李老师,\n');
-  await assert.rejects(readOutlineFile(file), /平行班执笔人不一致/);
+  const parallelClasses = [
+    '课程A,AI基础及应用类课程组,人工智能,张老师,任课教师甲,001',
+    '课程A,AI基础及应用类课程组,人工智能,李老师,任课教师乙,002',
+    '课程A,AI基础及应用类课程组,人工智能,张老师,任课教师丙,',
+  ];
+  await writeFile(file.path, header + parallelClasses.join('\n'));
+  const separate = await readOutlineFile(file);
+  assert.deepEqual(separate.rows.map((row) => [row.writer_name, row.writer_identifier, row.teacher_names]), [
+    ['张老师', '001', '任课教师甲、任课教师丙'],
+    ['李老师', '002', '任课教师乙'],
+  ]);
+  assert.notEqual(separate.rows[0].source_key, separate.rows[1].source_key);
+  await writeFile(file.path, header + [...parallelClasses].reverse().join('\n'));
+  const reordered = await readOutlineFile(file);
+  assert.deepEqual(reordered.rows.map((row) => row.source_key).sort(), separate.rows.map((row) => row.source_key).sort());
   await writeFile(file.path, header + '课程A,AI基础及应用类课程组,人工智能,张老师、李老师,张老师,\n');
   await assert.rejects(readOutlineFile(file), /多位执笔人/);
   await writeFile(file.path, '姓名,工号\n张老师,001\n');

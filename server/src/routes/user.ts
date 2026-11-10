@@ -96,7 +96,7 @@ userRouter.get('/options', (req, res) => {
     aiReady: aiReady() === null,
     checklist: checklist ? { id: checklist.id, name: checklist.name } : null,
     requiredCourses: db.prepare('SELECT DISTINCT course_name AS name, professional FROM outline_requirements WHERE writer_user_id = ? ORDER BY course_name').all(req.user!.id),
-    outlineCourses: db.prepare('SELECT id, course_name AS name, professional, course_group FROM outline_requirements ORDER BY course_group, professional, course_name').all(),
+    outlineCourses: db.prepare('SELECT id, course_name AS name, professional, course_group, writer_name, writer_identifier FROM outline_requirements ORDER BY course_group, professional, course_name, writer_name').all(),
   });
 });
 
@@ -177,7 +177,7 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
       return res.status(400).json({ error: '所选应交课程与课程名称、审核专业不一致，请重新选择清单课程' });
     }
     if (body.outlineRequirementId === undefined && requirements.length > 1) {
-      return res.status(400).json({ error: '同名课程属于多个课程组，请从云清单下拉中选择具体应交课程' });
+      return res.status(400).json({ error: '同名课程存在多个应交任务，请从云清单下拉中选择具体课程及执笔人' });
     }
     const requirementId = body.outlineRequirementId ?? requirements[0]?.id ?? null;
 

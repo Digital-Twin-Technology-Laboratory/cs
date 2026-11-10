@@ -165,7 +165,7 @@ export interface SubmissionRow {
 
 export interface Options {
   requiredCourses: { name: string; professional: string }[];
-  outlineCourses: { id: number; name: string; professional: string; course_group: string }[];
+  outlineCourses: { id: number; name: string; professional: string; course_group: string; writer_name: string; writer_identifier: string }[];
   majors: string[];
   studentGrades: number[];
   plans: { major: string; training_type: string; grade: number; name: string }[];

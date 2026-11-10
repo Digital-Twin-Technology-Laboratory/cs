@@ -27,7 +27,7 @@ function importTable(table: unknown[][], name: string) {
   if (required.some((column) => header.filter((cell) => cell === column).length !== 1)) {
     throw new RosterImportError('课程清单的必需列名不能重复');
   }
-  const rows = new Map<string, OutlineImportRow>();
+  const courses = new Map<string, OutlineImportRow[]>();
   const warnings = new Set<string>();
   for (let index = headerIndex + 1; index < table.length; index++) {
     const cells = table[index];
@@ -46,20 +46,33 @@ function importTable(table: unknown[][], name: string) {
     if (!course_group) warnings.add(`${course_name}：课程组${rawGroup ? `填写为“${rawGroup}”，需核实` : '未填写'}，保留总应交数，暂不开放给课程组长`);
     if (!professional) warnings.add(`${course_name}：审核专业未填写，保留总应交数，暂不归入专业负责人范围`);
     const source_key = JSON.stringify([course_name.toLowerCase(), professional, course_group]);
-    const existing = rows.get(source_key);
+    const parallel = courses.get(source_key) ?? [];
+    const existing = parallel.find((row) => row.writer_identifier && writer_identifier
+      ? row.writer_identifier === writer_identifier
+      : row.writer_name === writer_name && (!!writer_name || row.writer_identifier === writer_identifier));
     if (existing) {
-      if ((existing.writer_name && writer_name && existing.writer_name !== writer_name) || (existing.writer_identifier && writer_identifier && existing.writer_identifier !== writer_identifier)) {
-        throw new RosterImportError(`第 ${index + 1} 行 ${course_name} / ${professional} 的平行班执笔人不一致，请先确定唯一执笔人`);
-      }
       existing.writer_name ||= writer_name;
       existing.writer_identifier ||= writer_identifier;
       existing.teacher_names = [...new Set([...names(existing.teacher_names), ...names(value('教师名称'))])].join('、');
     } else {
-      rows.set(source_key, { source_key, course_name, course_group, professional, teacher_names: [...new Set(names(value('教师名称')))].join('、'), writer_name, writer_identifier });
+      parallel.push({ source_key, course_name, course_group, professional, teacher_names: [...new Set(names(value('教师名称')))].join('、'), writer_name, writer_identifier });
+    }
+    courses.set(source_key, parallel);
+  }
+  const rows: OutlineImportRow[] = [];
+  for (const parallel of courses.values()) {
+    const unassignedIndex = parallel.findIndex((row) => !row.writer_name && !row.writer_identifier);
+    if (parallel.length === 2 && unassignedIndex >= 0) {
+      const [unassigned] = parallel.splice(unassignedIndex, 1);
+      parallel[0].teacher_names = [...new Set([...names(parallel[0].teacher_names), ...names(unassigned.teacher_names)])].join('、');
+    }
+    for (const row of parallel) {
+      row.source_key = JSON.stringify([...JSON.parse(row.source_key), row.writer_identifier ? 'identifier' : 'name', row.writer_identifier || row.writer_name]);
+      rows.push(row);
     }
   }
-  if (!rows.size) throw new RosterImportError('课程清单中没有应交课程');
-  return { rows: [...rows.values()], warnings: [...warnings], name };
+  if (!rows.length) throw new RosterImportError('课程清单中没有应交课程');
+  return { rows, warnings: [...warnings], name };
 }
 
 export async function readOutlineFile(file: Express.Multer.File) {

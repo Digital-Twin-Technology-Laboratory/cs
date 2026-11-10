@@ -138,7 +138,7 @@ export default function Upload() {
                       <Form.Item name={['outlines', file.uid, 'outlineRequirementId']} hidden preserve={false}><Input type="hidden" /></Form.Item>
                       <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
                         <AutoComplete options={(options?.outlineCourses ?? []).filter((c) => options?.majors.includes(c.professional) || c.professional === '专转本').map((c) => ({
-                          key: c.id, value: `${c.name}（${c.professional || '未配置专业'} / ${c.course_group || '未分组'}）`,
+                          key: c.id, value: `${c.name}（${c.professional || '未配置专业'} / ${c.course_group || '未分组'} / ${[c.writer_name, c.writer_identifier].filter(Boolean).join(' / ') || '待分配'}）`,
                           name: c.name, professional: c.professional, requirementId: c.id,
                         }))}
                           onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)}
@@ -187,7 +187,7 @@ export default function Upload() {
               ]}
             />
           )}
-          {files.length > 0 && <p className="muted small">请从云清单下拉选择准确课程及课程组，系统会关联对应课程并填入审核专业；执笔人尚未指定也可上传，系统记录实际上传人并同步课程组进度。系统按每行专业匹配培养方案，未预置方案时仍可检查；名单外课程也可手工填写上传。</p>}
+          {files.length > 0 && <p className="muted small">请从云清单下拉选择准确课程、课程组及执笔人，系统会关联对应应交任务并填入审核专业；不同执笔人的同名课程分别计入各自进度。执笔人尚未指定也可上传，系统记录实际上传人并同步课程组进度。系统按每行专业匹配培养方案，未预置方案时仍可检查；名单外课程也可手工填写上传。</p>}
           <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
             {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>
