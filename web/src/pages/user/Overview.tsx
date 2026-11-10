@@ -4,10 +4,12 @@ import { Link } from 'react-router-dom';
 import { api } from '../../api';
 import CourseProgressTable from '../../components/CourseProgressTable';
 import type { PersonalProgress } from '../../types';
-import { DemoNumber, useDemo } from '../../demo';
+import StoredNumber from '../../components/EditableNumber';
+import { useAuth } from '../../auth';
 
 export default function Overview() {
-  const demo = useDemo();
+  const { user } = useAuth();
+  const scope = `personal:${user!.id}`;
   const [data, setData] = useState<PersonalProgress | null>(null);
   const [error, setError] = useState('');
   const load = useCallback(async () => {
@@ -26,13 +28,13 @@ export default function Overview() {
   return <div className="page">
     <div className="page-head">
       <div><h1>个人总览</h1><div className="sub">仅显示云文档清单中指定你为执笔人的应交课程，每 10 秒自动刷新。</div></div>
-      <Link to="/upload" onClick={(e) => { if (demo.enabled) e.preventDefault(); }}><Button type="primary" disabled={demo.enabled}>上传大纲</Button></Link>
+      <Link to="/upload"><Button type="primary">上传大纲</Button></Link>
     </div>
     {error && <Alert type="error" showIcon title={error} action={<Button onClick={load}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Card loading={!data && !error}>
       {data && <>
         <Row gutter={[16, 16]}>
-          {([['required', '应交大纲'], ['uploaded', '已上传'], ['passed', '已通过'], ['confirmed', '最终已确认']] as const).map(([key, title]) => <Col xs={12} md={6} key={key}><Statistic title={title} value={key === 'required' ? data[key] : `${data[key]} / ${data.required}`} formatter={demo.enabled ? () => <><DemoNumber name={`personal:${key}`} value={data[key]} />{key !== 'required' && <> / <DemoNumber name="personal:required" value={data.required} /></>}</> : undefined} suffix="份" /></Col>)}
+          {([['required', '应交大纲'], ['uploaded', '已上传'], ['passed', '已通过'], ['confirmed', '最终已确认']] as const).map(([key, title]) => <Col xs={12} md={6} key={key}><Statistic title={title} value={data[key]} formatter={() => <><StoredNumber scope={scope} name={key} value={data[key]} />{key !== 'required' && <> / <StoredNumber scope={scope} name="required" value={data.required} /></>}</>} suffix="份" /></Col>)}
         </Row>
         <Alert type="info" showIcon style={{ margin: '20px 0' }}
           title="按云清单的课程、审核专业和课程组合并平行班，每门课程只需一份大纲。"

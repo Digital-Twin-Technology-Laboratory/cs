@@ -9,6 +9,7 @@ import { loadUser, sessionMiddleware } from './auth.js';
 import { authRouter } from './routes/auth.js';
 import { userRouter } from './routes/user.js';
 import { adminRouter } from './routes/admin.js';
+import { statisticOverridesRouter } from './routes/statisticOverrides.js';
 import { supervisionManagementRouter, supervisionViewRouter } from './routes/supervision.js';
 import { startQueue } from './services/checkQueue.js';
 
@@ -23,6 +24,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/supervision-management', supervisionManagementRouter);
 app.use('/api/supervision', supervisionViewRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/statistic-overrides', statisticOverridesRouter);
 app.use('/api', userRouter);
 app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
 

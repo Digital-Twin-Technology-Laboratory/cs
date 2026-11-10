@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS statistic_overrides (
+  scope TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value INTEGER NOT NULL,
+  PRIMARY KEY (scope, name)
+);
 CREATE TABLE IF NOT EXISTS ai_profiles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -214,21 +220,6 @@ if (!userColumns.some((column) => column.name === 'must_change_password')) {
 }
 if (!userColumns.some((column) => column.name === 'supervision_manager')) {
   db.exec('ALTER TABLE users ADD COLUMN supervision_manager INTEGER NOT NULL DEFAULT 0');
-}
-if (!userColumns.some((column) => column.name === 'demo_editor')) {
-  db.exec('ALTER TABLE users ADD COLUMN demo_editor INTEGER NOT NULL DEFAULT 0');
-}
-export function applyDefaultDemoEditor(userId: number, name: string) {
-  if (!['汤家华', '柳宝华'].includes(name)) return;
-  if (db.prepare('SELECT id FROM users WHERE name = ?').all(name).length !== 1) return;
-  db.prepare('UPDATE users SET demo_editor = 1 WHERE id = ?').run(userId);
-}
-if (!db.prepare("SELECT 1 FROM settings WHERE key = 'demo_editors_initialized'").get()) {
-  db.transaction(() => {
-    const users = db.prepare("SELECT id, name FROM users WHERE name IN ('汤家华', '柳宝华')").all() as { id: number; name: string }[];
-    for (const user of users) applyDefaultDemoEditor(user.id, user.name);
-    db.prepare("INSERT INTO settings (key, value) VALUES ('demo_editors_initialized', '1')").run();
-  })();
 }
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'supervision_manager_initialized'").get()) {
   const tang = db.prepare("SELECT id FROM users WHERE name = '汤家华'").all() as { id: number }[];

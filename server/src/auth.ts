@@ -21,13 +21,13 @@ export interface UserRow {
   college_role: 'none' | 'teaching' | 'program';
   must_change_password: number;
   supervision_manager: number;
-  demo_editor: number;
+  demo_editor?: number;
   status: 'pending' | 'active' | 'disabled';
   created_at: string;
   last_login_at: string | null;
 }
 
-export type PublicUser = Omit<UserRow, 'password_hash'> & { led_groups: string[]; program_scopes: string[] };
+export type PublicUser = Omit<UserRow, 'password_hash' | 'demo_editor'> & { led_groups: string[]; program_scopes: string[] };
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -40,7 +40,7 @@ declare global {
 
 export function toPublic(u: UserRow): PublicUser {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { password_hash, ...rest } = u;
+  const { password_hash, demo_editor, ...rest } = u;
   const groups = db.prepare('SELECT course_group FROM course_group_leaders WHERE user_id = ? ORDER BY course_group').all(u.id) as { course_group: string }[];
   const programs = db.prepare('SELECT professional FROM program_leader_scopes WHERE user_id = ? ORDER BY professional').all(u.id) as { professional: string }[];
   return { ...rest, led_groups: groups.map((g) => g.course_group), program_scopes: programs.map((p) => p.professional) };

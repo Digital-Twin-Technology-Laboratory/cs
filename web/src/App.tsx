@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Spin } from 'antd';
 import { useAuth } from './auth';
-import { DemoProvider } from './demo';
+import { NumberOverridesProvider } from './components/EditableNumber';
 import AppLayout from './layouts/AppLayout';
 import AdminLayout from './layouts/AdminLayout';
 import Login from './pages/Login';
@@ -51,7 +51,7 @@ export default function App() {
       <Route
         element={
           <RequireAuth>
-            <DemoProvider key={user?.id}><AppLayout /></DemoProvider>
+            <NumberOverridesProvider key={user?.id}><AppLayout /></NumberOverridesProvider>
           </RequireAuth>
         }
       >

@@ -13,7 +13,6 @@ export interface User {
   led_groups: string[];
   program_scopes: string[];
   supervision_manager: number;
-  demo_editor: number;
   must_change_password: number;
   status: UserStatus;
   created_at: string;

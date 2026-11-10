@@ -396,24 +396,60 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.deepEqual(database.prepare('SELECT verdict, result_json, file_path FROM submissions WHERE user_id = ? ORDER BY id').all(userId), before);
   });
 
-  await t.test('demo editing is bound to the two trusted accounts, not self-service names or admin role', async () => {
-    assert.equal((await admin('/api/auth/me')).data.user.demo_editor, 0);
-    assert.equal((await teacher('/api/auth/me')).data.user.demo_editor, 0);
-    await admin('/api/admin/users', { username: 'demo-tang', name: '汤家华', password: 'demo12345' });
-    const tang = client();
-    assert.equal((await tang('/api/auth/login', { username: 'demo-tang', password: 'demo12345' })).data.user.demo_editor, 1);
-    await tang('/api/auth/password', { oldPassword: 'demo12345', newPassword: 'demo-changed12345' }, 'PUT');
-    assert.equal((await tang('/api/auth/profile', { name: '示意任课教师' }, 'PUT')).data.user.demo_editor, 1);
-    const impersonator = client();
-    const registered = await impersonator('/api/auth/register', { username: 'demo-impostor', name: '汤家华', password: 'demo12345' });
-    assert.equal(registered.data.user.demo_editor, 0);
-    assert.equal((await teacher('/api/auth/profile', { name: '柳宝华' }, 'PUT')).data.user.demo_editor, 0);
-    await teacher('/api/auth/profile', { name: '测试教师' }, 'PUT');
-    const roster = new FormData();
-    roster.append('file', new Blob(['姓名,工号\n柳宝华,demo-liu']), 'demo-teachers.csv');
-    assert.equal((await admin('/api/admin/users/import', roster)).data.imported, 1);
-    const liu = client();
-    assert.equal((await liu('/api/auth/login', { username: 'demo-liu', password: '12345678' })).data.user.demo_editor, 1);
+  await t.test('manual numbers persist with admin-only writes and do not alter upload results', async () => {
+    const statistic = { scope: 'college', name: JSON.stringify(['', '', '', 'summary', 'uploaded']), value: 9 };
+    const id = database.prepare("SELECT id FROM submissions WHERE user_id = ? AND status = 'done' AND result_json IS NOT NULL LIMIT 1").get(teacherId).id;
+    const before = database.prepare('SELECT verdict, result_json, confirmed_at FROM submissions WHERE id = ?').get(id);
+    assert.equal((await client()('/api/statistic-overrides')).status, 401);
+    assert.equal((await client()('/api/statistic-overrides', statistic, 'PUT')).status, 401);
+    assert.equal((await teacher('/api/statistic-overrides', statistic, 'PUT')).status, 403);
+    for (const [username, name] of [['number-tang', '汤家华'], ['number-liu', '柳宝华']]) {
+      await admin('/api/admin/users', { username, name, password: 'number12345' });
+      const request = client();
+      const login = await request('/api/auth/login', { username, password: 'number12345' });
+      const userId = login.data.user.id;
+      await request('/api/auth/password', { oldPassword: 'number12345', newPassword: 'number-changed12345' }, 'PUT');
+      assert.equal((await admin(`/api/admin/users/${userId}`, { college_role: 'teaching' }, 'PUT')).status, 200);
+      if (!database.prepare('PRAGMA table_info(users)').all().some((column) => column.name === 'demo_editor')) {
+        database.exec('ALTER TABLE users ADD COLUMN demo_editor INTEGER NOT NULL DEFAULT 0');
+      }
+      database.prepare('UPDATE users SET demo_editor = 1 WHERE id = ?').run(userId);
+      assert.equal((await request('/api/auth/me')).data.user.demo_editor, undefined);
+      assert.equal((await request('/api/statistic-overrides', statistic, 'PUT')).status, 403);
+      assert.equal((await request(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 403);
+      if (username === 'number-tang') {
+        assert.equal((await admin(`/api/admin/users/${userId}`, { role: 'admin' }, 'PUT')).status, 200);
+        assert.equal((await request('/api/statistic-overrides', statistic, 'PUT')).status, 200);
+        assert.equal((await admin(`/api/admin/users/${userId}`, { role: 'user' }, 'PUT')).status, 200);
+        assert.equal((await request('/api/statistic-overrides', statistic, 'PUT')).status, 403);
+      }
+    }
+    assert.equal((await admin('/api/statistic-overrides', statistic, 'PUT')).status, 200);
+    assert.equal(database.prepare('SELECT value FROM statistic_overrides WHERE scope = ? AND name = ?').get(statistic.scope, statistic.name).value, 9);
+    assert.ok((await admin('/api/statistic-overrides')).data.rows.some((row) => row.scope === 'college' && row.value === 9));
+    assert.ok(!(await teacher('/api/statistic-overrides')).data.rows.some((row) => row.scope === 'college'));
+    const personal = { scope: `personal:${teacherId}`, name: 'uploaded', value: 3 };
+    assert.equal((await admin('/api/statistic-overrides', personal, 'PUT')).status, 200);
+    assert.deepEqual((await teacher('/api/statistic-overrides')).data.rows, [personal]);
+    for (const value of [-1, 1.5, '9']) {
+      assert.equal((await admin('/api/statistic-overrides', { ...statistic, value }, 'PUT')).status, 400);
+    }
+    const reopened = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+      cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(reopened.status, 0, reopened.stderr);
+    assert.ok((await teacher('/api/statistic-overrides')).data.rows.some((row) => row.value === 3));
+    assert.equal((await teacher(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 403);
+    assert.equal((await admin(`/api/admin/submissions/${id}/sequence`, { seq: 0 }, 'PUT')).status, 400);
+    assert.equal((await admin('/api/admin/submissions/999999/sequence', { seq: 5 }, 'PUT')).status, 404);
+    assert.equal((await admin(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 200);
+    assert.equal((await teacher(`/api/submissions/${id}`)).data.submission.seq, 5);
+    assert.match((await teacher(`/api/submissions/${id}/report.txt`)).data.text, /检查次数：第5次/);
+    assert.deepEqual(database.prepare('SELECT verdict, result_json, confirmed_at FROM submissions WHERE id = ?').get(id), before);
+    assert.equal((await admin('/api/statistic-overrides', { ...statistic, value: null }, 'PUT')).status, 200);
+    assert.ok(!(await admin('/api/statistic-overrides')).data.rows.some((row) => row.scope === 'college'));
+    assert.ok(database.prepare("SELECT 1 FROM audit_logs WHERE action = '修改统计数字'").get());
+    assert.ok(database.prepare("SELECT 1 FROM audit_logs WHERE action = '修改上传次数'").get());
   });
 
   await t.test('download includes all active checklist content and follows version changes', async () => {

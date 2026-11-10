@@ -304,17 +304,6 @@ body {
   border-bottom: none;
   line-height: 54px;
 }
-.demo-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px 32px;
-  background: #fff7e6;
-  border-bottom: 1px solid #ffe7ba;
-  font-size: 13px;
-}
 
 .auth-wrap {
   min-height: 100vh;
