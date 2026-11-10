@@ -6,6 +6,8 @@ import { useAuth } from '../../auth';
 import Table from '../../components/ResponsiveTable';
 import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import type { SubStatus } from '../../types';
+import { DemoNumber, useDemo, type DemoProgress } from '../../demo';
+import dayjs from 'dayjs';
 
 export interface RequirementRow {
   id: number;
@@ -45,6 +47,7 @@ const isConfirmed = (r: RequirementRow) => r.status === 'done' && r.confirmed_at
 
 export default function Supervision({ embedded = false }: { embedded?: boolean }) {
   const { user } = useAuth();
+  const demo = useDemo();
   const { message } = App.useApp();
   const [params, setParams] = useSearchParams();
   const view = params.get('view') ?? '';
@@ -82,7 +85,18 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
     } catch (e) { message.error((e as Error).message); }
     finally { setConfirming(null); }
   };
-  const scoped = data?.rows.filter((r) => (!group || r.course_group === group) && (!program || r.professional === program)
+  const demoRows = data?.rows.map<RequirementRow>((r) => {
+    const state = demo.progress[r.id];
+    if (!state) return r;
+    const missing = state === 'missing';
+    return { ...r, latest_id: missing ? null : -r.id, status: missing ? null : 'done',
+      verdict: missing ? null : state === 'failed' ? 'failed' : 'passed',
+      confirmed_at: state === 'confirmed' ? dayjs().format('YYYY-MM-DD HH:mm:ss') : null,
+      confirmed_by: state === 'confirmed' ? '课程组长' : '', can_confirm: false,
+      uploader_name: missing ? '' : r.name || r.writer_name || demo.teacherName!, uploader_username: missing ? '' : r.username,
+      created_at: missing ? null : dayjs().format('YYYY-MM-DD HH:mm:ss') };
+  });
+  const scoped = demoRows?.filter((r) => (!group || r.course_group === group) && (!program || r.professional === program)
     && `${r.name} ${r.writer_name} ${r.username} ${r.course_name} ${r.teacher_names} ${r.uploader_name} ${r.uploader_username}`.toLowerCase().includes(q.trim().toLowerCase())) ?? [];
   const people = new Map<string, PersonRow>();
   for (const course of scoped) {
@@ -105,21 +119,24 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
       { title: '应交课程', width: 280, render: (_, r) => <div>{r.course_name}<div className="muted small">课程组：{r.course_group || '未分组'}</div><div className="muted small">审核专业：{r.professional || '未配置'}</div></div> },
       { title: '执笔人', width: 150, render: (_, r) => <div>{r.name || r.writer_name || r.username || '待指定'}<div className="muted small">{r.username}</div>{r.user_id === null && (r.writer_name || r.username) && <Tag>未匹配到账号</Tag>}</div> },
       { title: '实际上传人', width: 150, render: (_, r) => <div>{r.uploader_name || r.uploader_username || '尚未上传'}{r.uploader_username && <div className="muted small">{r.uploader_username}</div>}</div> },
-      { title: '最新检查', width: 120, render: (_, r) => r.latest_id === null ? '未上传' : <SubmissionTag status={r.status} verdict={r.verdict} /> },
+      { title: '最新检查', width: 120, render: (_, r) => demo.editing ? <Select<DemoProgress> aria-label={`示意课程进度-${r.id}`} style={{ width: '100%' }} value={demo.progress[r.id] ?? (r.latest_id === null ? 'missing' : r.confirmed_at ? 'confirmed' : r.verdict === 'passed' ? 'passed' : 'failed')}
+        options={[{ value: 'missing', label: '未上传' }, { value: 'failed', label: '未通过' }, { value: 'passed', label: '已通过' }, { value: 'confirmed', label: '通过且已确认' }]} onChange={(v) => demo.setProgress({ [r.id]: v })} /> : r.latest_id === null ? '未上传' : <SubmissionTag status={r.status} verdict={r.verdict} /> },
       { title: '最终确认', width: 170, render: (_, r) => <div><ConfirmationTag status={r.status} confirmedAt={r.confirmed_at} />{r.confirmed_by && <div className="muted small">{r.confirmed_by}</div>}</div> },
       { title: '操作', width: 150, render: (_, r) => <Space orientation="vertical" size={6}>
-        {r.latest_id !== null && <Link to={`/submissions/${r.latest_id}`}>在线查看大纲与结果</Link>}
-        {r.can_confirm && r.latest_id !== null && r.status === 'done' && !r.confirmed_at && <Popconfirm title="组长最终确认此份大纲？" description="确认后直接视为最终确认，无需教师再次确认。" onConfirm={() => confirm(r.latest_id!)}><Button size="small" type="primary" loading={confirming === r.latest_id}>组长最终确认</Button></Popconfirm>}
+        {r.latest_id !== null && (demo.enabled ? <span className="muted">在线查看大纲与结果</span> : <Link to={`/submissions/${r.latest_id}`}>在线查看大纲与结果</Link>)}
+        {!demo.enabled && r.can_confirm && r.latest_id !== null && r.status === 'done' && !r.confirmed_at && <Popconfirm title="组长最终确认此份大纲？" description="确认后直接视为最终确认，无需教师再次确认。" onConfirm={() => confirm(r.latest_id!)}><Button size="small" type="primary" loading={confirming === r.latest_id}>组长最终确认</Button></Popconfirm>}
       </Space> },
     ]} />;
   const actions = <Space wrap>
+    {demo.editing && <Button onClick={() => demo.setProgress(Object.fromEntries(data!.rows.map((r, i, rows) => [r.id,
+      i < Math.ceil(rows.length * 0.4) ? 'confirmed' : i < Math.ceil(rows.length * 0.6) ? 'passed' : i < Math.ceil(rows.length * 0.8) ? 'failed' : 'missing'])))} disabled={!data}>填入示例进度</Button>}
     <Button onClick={() => setRefresh((n) => n + 1)}>刷新进度</Button>
     {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/submissions?scope=college"><Button>全院检查记录</Button></Link>}
     {user && (user.role === 'admin' || user.supervision_manager === 1) && <Link to="/view-management"><Button>视图与执笔人配置</Button></Link>}
   </Space>;
   return <div className={embedded ? undefined : 'page'}>
     {!embedded && <div className="page-head"><div><h1>{data ? VIEW_NAMES[data.view] : '监督总览'}</h1>
-      <div className="sub">{user?.name}：按已授权范围查看课程进度，平行班合并；执笔人待定不影响课程上传与确认。</div></div>
+      <div className="sub">{demo.teacherName}：按已授权范围查看课程进度，平行班合并；执笔人待定不影响课程上传与确认。</div></div>
       {actions}</div>}
     {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />}
     {data && !data.source && <Alert type="warning" showIcon title="尚未导入大纲云文档清单"
@@ -135,12 +152,9 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
         <Input placeholder="课程 / 执笔人 / 实际上传人 / 工号" value={q} allowClear onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ width: 270 }} />
       </Space>
       <Row gutter={[16, 16]}>
-        <Col xs={12} md={4}><Statistic title="课程总数" value={scoped.length} suffix="门" /></Col>
-        <Col xs={12} md={4}><Statistic title="已上传 / 应交" value={uploaded} suffix={`/ ${scoped.length} 门`} /></Col>
-        <Col xs={12} md={4}><Statistic title="已通过 / 应交" value={passed} suffix={`/ ${scoped.length} 门`} /></Col>
-        <Col xs={12} md={4}><Statistic title="最终确认 / 应交" value={confirmed} suffix={`/ ${scoped.length} 门`} /></Col>
-        <Col xs={12} md={4}><Statistic title="尚未上传" value={scoped.length - uploaded} suffix="门" /></Col>
-        <Col xs={12} md={4}><Statistic title="执笔人待定" value={unassigned} suffix="门课程" /></Col>
+        {([['课程总数', scoped.length], ['已上传 / 应交', uploaded], ['已通过 / 应交', passed], ['最终确认 / 应交', confirmed], ['尚未上传', scoped.length - uploaded], ['执笔人待定', unassigned]] as const).map(([title, count], i) =>
+          <Col xs={12} md={4} key={title}><Statistic title={title} value={count} formatter={demo.enabled ? () => <DemoNumber name={`${data?.view}:${group}:${program}:${q}:${title}`} value={count} /> : undefined}
+            suffix={i >= 1 && i <= 3 ? <>/ <DemoNumber name={`${data?.view}:${group}:${program}:${q}:课程总数`} value={scoped.length} /> 门</> : i === 5 ? '门课程' : '门'} /></Col>)}
       </Row>
       <Alert type="info" showIcon style={{ margin: '20px 0' }} title="按云文档课程清单统计，平行班合并，与磨课安排无关。"
         description="课程进度取对应课程的最新上传、检查和确认，不要求预先指定执笔人。执笔人待定也可上传，系统记录实际上传人；组长可查看本组课程并最终确认，新上传需确认新结果。上方统计随课程组、审核专业和搜索变化，不受课程状态筛选影响。" />
@@ -156,10 +170,13 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
           pagination={{ current: page, pageSize: 20, showSizeChanger: false, total: peopleRows.length, onChange: setPage, showTotal: (n) => `共 ${n} 位执笔人` }}
           columns={[
             { title: '执笔人', width: 190, render: (_, r) => <div><strong>{r.name}</strong><div className="muted small">{r.username}</div>{r.unmatched && <Tag>未匹配到账号</Tag>}</div> },
-            { title: '需要上传', width: 100, render: (_, r) => `${r.courses.length} 份` },
-            { title: '已上传 / 应交', width: 130, render: (_, r) => `${r.courses.filter((c) => c.latest_id !== null).length} / ${r.courses.length}` },
-            { title: '已通过 / 应交', width: 160, render: (_, r) => <div>{r.courses.filter(isPassed).length} / {r.courses.length}<div><Tag color={r.courses.every(isPassed) ? 'success' : undefined}>{r.courses.every(isPassed) ? '全部已通过' : '尚未全部通过'}</Tag></div></div> },
-            { title: '最终确认 / 应交', width: 140, render: (_, r) => `${r.courses.filter(isConfirmed).length} / ${r.courses.length}` },
+            { title: '需要上传', width: 100, render: (_, r) => <><DemoNumber name={`person:${r.key}:required`} value={r.courses.length} /> 份</> },
+            { title: '已上传 / 应交', width: 130, render: (_, r) => <><DemoNumber name={`person:${r.key}:uploaded`} value={r.courses.filter((c) => c.latest_id !== null).length} /> / <DemoNumber name={`person:${r.key}:required`} value={r.courses.length} /></> },
+            { title: '已通过 / 应交', width: 160, render: (_, r) => {
+              const allPassed = (demo.numbers[`person:${r.key}:passed`] ?? r.courses.filter(isPassed).length) === (demo.numbers[`person:${r.key}:required`] ?? r.courses.length);
+              return <div><DemoNumber name={`person:${r.key}:passed`} value={r.courses.filter(isPassed).length} /> / <DemoNumber name={`person:${r.key}:required`} value={r.courses.length} /><div><Tag color={allPassed ? 'success' : undefined}>{allPassed ? '全部已通过' : '尚未全部通过'}</Tag></div></div>;
+            } },
+            { title: '最终确认 / 应交', width: 140, render: (_, r) => <><DemoNumber name={`person:${r.key}:confirmed`} value={r.courses.filter(isConfirmed).length} /> / <DemoNumber name={`person:${r.key}:required`} value={r.courses.length} /></> },
           ]} />
         </> },
       ]} />

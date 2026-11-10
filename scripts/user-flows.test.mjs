@@ -1,6 +1,6 @@
 // Run: node --disable-warning=ExperimentalWarning --import tsx --test scripts/user-flows.test.mjs
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
@@ -343,6 +343,77 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.match(converted.value, /<h1>一 明确问题及重大问题<\/h1>/);
     assert.match(converted.value, /<h2>A01 考核权重不符<\/h2>/);
     assert.equal((await client()(`/api/submissions/${id}/report.docx`)).status, 401);
+  });
+
+  await t.test('upload sequences follow course identity instead of a newly created course ID', async () => {
+    const uploader = client();
+    const registered = await uploader('/api/auth/register', { username: 'history-teacher', name: 'History Teacher', password: 'history12345' });
+    const userId = registered.data.user.id;
+    assert.equal((await admin(`/api/admin/users/${userId}/check-quota`, { amount: 5 })).status, 200);
+    const expected = [];
+    const upload = async (patch, sequence) => {
+      const form = uploadForm();
+      form.set('name', 'Revision Course');
+      for (const [key, value] of Object.entries(patch)) form.set(key, String(value));
+      form.set('file', new Blob([syllabus]), `revision-${expected.length}.docx`);
+      const result = await uploader('/api/submissions', form);
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      const id = result.data.submissionId;
+      await waitFor(() => database.prepare('SELECT status FROM submissions WHERE id = ?').get(id).status === 'done');
+      assert.equal((await uploader(`/api/submissions/${id}`)).data.submission.seq, sequence);
+      expected.push({ id, seq: sequence });
+    };
+    await upload({}, 1);
+    await upload({}, 2);
+    await upload({}, 3);
+    await upload({ name: 'revision course', planGrade: 2024 }, 4);
+    await upload({ studentGrade: 2024 }, 1);
+    await upload({ major: '物联网工程' }, 1);
+    const requirementIds = ['group-a', 'group-b'].map((group) => Number(database.prepare(
+      "INSERT INTO outline_requirements (source_key, course_name, course_group, professional) VALUES (?, 'Bound Revision', ?, '人工智能')",
+    ).run(`history-${group}`, group).lastInsertRowid));
+    await upload({ name: 'Bound Revision', outlineRequirementId: requirementIds[0] }, 1);
+    await upload({ name: 'Bound Revision', outlineRequirementId: requirementIds[0] }, 2);
+    await upload({ name: 'Bound Revision', outlineRequirementId: requirementIds[1] }, 1);
+    const rows = (await uploader('/api/submissions')).data.rows;
+    assert.deepEqual(rows.map(({ id, seq }) => ({ id, seq })), [...expected].reverse());
+    const other = client();
+    await other('/api/auth/register', { username: 'history-other', name: 'History Other', password: 'history12345' });
+    const form = uploadForm();
+    form.set('name', 'Revision Course');
+    const result = await other('/api/submissions', form);
+    assert.equal(result.status, 200);
+    await waitFor(() => database.prepare('SELECT status FROM submissions WHERE id = ?').get(result.data.submissionId).status === 'done');
+    assert.equal((await other(`/api/submissions/${result.data.submissionId}`)).data.submission.seq, 1);
+    const before = database.prepare('SELECT verdict, result_json, file_path FROM submissions WHERE user_id = ? ORDER BY id').all(userId);
+    database.prepare('UPDATE submissions SET seq = 1 WHERE user_id = ?').run(userId);
+    database.prepare("DELETE FROM settings WHERE key = 'submission_sequences_initialized'").run();
+    const migrated = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+      cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(migrated.status, 0, migrated.stderr);
+    assert.deepEqual(database.prepare('SELECT id, seq FROM submissions WHERE user_id = ? ORDER BY id').all(userId).map((r) => ({ ...r })), expected);
+    assert.deepEqual(database.prepare('SELECT verdict, result_json, file_path FROM submissions WHERE user_id = ? ORDER BY id').all(userId), before);
+  });
+
+  await t.test('demo editing is bound to the two trusted accounts, not self-service names or admin role', async () => {
+    assert.equal((await admin('/api/auth/me')).data.user.demo_editor, 0);
+    assert.equal((await teacher('/api/auth/me')).data.user.demo_editor, 0);
+    await admin('/api/admin/users', { username: 'demo-tang', name: '汤家华', password: 'demo12345' });
+    const tang = client();
+    assert.equal((await tang('/api/auth/login', { username: 'demo-tang', password: 'demo12345' })).data.user.demo_editor, 1);
+    await tang('/api/auth/password', { oldPassword: 'demo12345', newPassword: 'demo-changed12345' }, 'PUT');
+    assert.equal((await tang('/api/auth/profile', { name: '示意任课教师' }, 'PUT')).data.user.demo_editor, 1);
+    const impersonator = client();
+    const registered = await impersonator('/api/auth/register', { username: 'demo-impostor', name: '汤家华', password: 'demo12345' });
+    assert.equal(registered.data.user.demo_editor, 0);
+    assert.equal((await teacher('/api/auth/profile', { name: '柳宝华' }, 'PUT')).data.user.demo_editor, 0);
+    await teacher('/api/auth/profile', { name: '测试教师' }, 'PUT');
+    const roster = new FormData();
+    roster.append('file', new Blob(['姓名,工号\n柳宝华,demo-liu']), 'demo-teachers.csv');
+    assert.equal((await admin('/api/admin/users/import', roster)).data.imported, 1);
+    const liu = client();
+    assert.equal((await liu('/api/auth/login', { username: 'demo-liu', password: '12345678' })).data.user.demo_editor, 1);
   });
 
   await t.test('download includes all active checklist content and follows version changes', async () => {

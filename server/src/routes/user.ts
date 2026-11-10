@@ -205,7 +205,13 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
       planGrade: course.plan_grade,
       adjustNote: course.adjust_note,
     };
-    const seq = (db.prepare('SELECT COUNT(*) AS n FROM submissions WHERE course_id = ?').get(course.id) as { n: number }).n + 1;
+    const seq = (db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM submissions
+      WHERE user_id = ? AND outline_requirement_id IS ?
+        AND (? IS NOT NULL OR json_extract(course_snapshot, '$.name') = ? COLLATE NOCASE)
+        AND json_extract(course_snapshot, '$.major') = ?
+        AND json_extract(course_snapshot, '$.trainingType') = ?
+        AND json_extract(course_snapshot, '$.studentGrade') = ?`)
+      .get(req.user!.id, requirementId, requirementId, body.name, body.major, body.trainingType, body.studentGrade) as { next: number }).next;
     const r = db
       .prepare(
         `INSERT INTO submissions (course_id, user_id, seq, file_name, file_path, file_size, extracted_text, checklist_version_id, plan_id, plan_name, course_snapshot, outline_requirement_id)

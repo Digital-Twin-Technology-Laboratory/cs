@@ -215,6 +215,21 @@ if (!userColumns.some((column) => column.name === 'must_change_password')) {
 if (!userColumns.some((column) => column.name === 'supervision_manager')) {
   db.exec('ALTER TABLE users ADD COLUMN supervision_manager INTEGER NOT NULL DEFAULT 0');
 }
+if (!userColumns.some((column) => column.name === 'demo_editor')) {
+  db.exec('ALTER TABLE users ADD COLUMN demo_editor INTEGER NOT NULL DEFAULT 0');
+}
+export function applyDefaultDemoEditor(userId: number, name: string) {
+  if (!['汤家华', '柳宝华'].includes(name)) return;
+  if (db.prepare('SELECT id FROM users WHERE name = ?').all(name).length !== 1) return;
+  db.prepare('UPDATE users SET demo_editor = 1 WHERE id = ?').run(userId);
+}
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'demo_editors_initialized'").get()) {
+  db.transaction(() => {
+    const users = db.prepare("SELECT id, name FROM users WHERE name IN ('汤家华', '柳宝华')").all() as { id: number; name: string }[];
+    for (const user of users) applyDefaultDemoEditor(user.id, user.name);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('demo_editors_initialized', '1')").run();
+  })();
+}
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'supervision_manager_initialized'").get()) {
   const tang = db.prepare("SELECT id FROM users WHERE name = '汤家华'").all() as { id: number }[];
   if (tang.length === 1) db.prepare("UPDATE users SET supervision_manager = 1, college_role = CASE WHEN college_role='none' THEN 'teaching' ELSE college_role END WHERE id = ?").run(tang[0].id);
@@ -268,6 +283,23 @@ if (!submissionColumns.some((column) => column.name === 'confirmed_at')) {
 }
 if (!submissionColumns.some((column) => column.name === 'confirmed_by')) {
   db.exec("ALTER TABLE submissions ADD COLUMN confirmed_by TEXT NOT NULL DEFAULT ''");
+}
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'submission_sequences_initialized'").get()) {
+  db.transaction(() => {
+    db.exec(`
+      WITH numbered AS (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY user_id, outline_requirement_id,
+            CASE WHEN outline_requirement_id IS NULL THEN json_extract(course_snapshot, '$.name') ELSE '' END COLLATE NOCASE,
+            json_extract(course_snapshot, '$.major'), json_extract(course_snapshot, '$.trainingType'),
+            json_extract(course_snapshot, '$.studentGrade')
+          ORDER BY id
+        ) AS sequence FROM submissions
+      )
+      UPDATE submissions SET seq = (SELECT sequence FROM numbered WHERE numbered.id = submissions.id)
+    `);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('submission_sequences_initialized', '1')").run();
+  })();
 }
 
 /** 首次启动写入初始检查清单 */

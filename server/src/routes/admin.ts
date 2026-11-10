@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { applyDefaultGroupView, applyDefaultProfessionalView, audit, db } from '../db.js';
+import { applyDefaultDemoEditor, applyDefaultGroupView, applyDefaultProfessionalView, audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
 import { DEFAULT_AI_SETTINGS, getSettings, saveSettings, type AiSettings } from '../settings.js';
 import { decrypt, encrypt, mask } from '../services/crypto.js';
@@ -184,6 +184,7 @@ adminRouter.post('/users', (req, res) => {
       .run(body.username, bcrypt.hashSync(body.password, 10), body.name, body.department, body.role);
     applyDefaultProfessionalView(created.lastInsertRowid, body.name);
     applyDefaultGroupView(created.lastInsertRowid, body.name);
+    applyDefaultDemoEditor(created.lastInsertRowid, body.name);
     return created;
   })();
   audit(req.user, '新建账号', body.username, body.role === 'admin' ? '管理员' : '普通用户', req.ip);
@@ -207,6 +208,7 @@ adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, r
       for (const user of added) {
         applyDefaultProfessionalView(user.id, user.name);
         applyDefaultGroupView(user.id, user.name);
+        applyDefaultDemoEditor(user.id, user.name);
       }
       return added.length;
     })();

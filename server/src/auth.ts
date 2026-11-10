@@ -21,6 +21,7 @@ export interface UserRow {
   college_role: 'none' | 'teaching' | 'program';
   must_change_password: number;
   supervision_manager: number;
+  demo_editor: number;
   status: 'pending' | 'active' | 'disabled';
   created_at: string;
   last_login_at: string | null;
