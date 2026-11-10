@@ -8,6 +8,7 @@ import { useAuth } from '../../auth';
 import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import { fmtSize } from './CourseDetail';
 import { EditableNumber } from '../../components/EditableNumber';
+import EditableText from '../../components/EditableText';
 import type { SubmissionRow } from '../../types';
 
 interface Row extends SubmissionRow { username: string; user_name: string }
@@ -18,6 +19,7 @@ export default function Submissions() {
   const [params, setParams] = useSearchParams();
   const scope = params.get('scope') === 'college' ? 'college' : 'mine';
   const canViewCollege = user?.role === 'admin' || user?.college_role === 'teaching';
+  const canEditRecords = user?.role === 'admin' || user?.college_role === 'teaching';
   const [filters, setFilters] = useState({ q: '', status: '', confirmation: '' });
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ total: number; rows: Row[] }>({ total: 0, rows: [] });
@@ -45,6 +47,9 @@ export default function Submissions() {
     setPage(1);
     setFilters((prev) => ({ ...prev, ...patch }));
   };
+  const editField = (row: Row, field: 'course_name' | 'major' | 'student_grade' | 'file_name' | 'verdict', value: string, children: React.ReactNode, options?: { value: string; label: string }[]) =>
+    <EditableText value={value} name={`${field}-${row.id}`} options={options} disabled={row.status === 'queued' || row.status === 'running' || (field === 'verdict' && row.status !== 'done')}
+      onSave={async (next) => { await api.put(`/api/submissions/${row.id}`, { [field]: field === 'student_grade' ? Number(next) : next }); await load(); }}>{children}</EditableText>;
 
   return (
     <div className="page">
@@ -94,13 +99,13 @@ export default function Submissions() {
           pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showSizeChanger: false, showTotal: (total) => `共 ${total} 条上传记录` }}
           locale={{ emptyText: <Empty description="暂无上传记录" /> }}
           columns={[
-            { title: '课程', dataIndex: 'course_name', render: (name, row) => <Link to={`/submissions/${row.id}`}>{name}</Link> },
-            { title: '年级', dataIndex: 'student_grade', width: 80, render: (grade) => `${String(grade).slice(-2)}级` },
-            { title: '专业', dataIndex: 'major', width: 180 },
+            { title: '课程', dataIndex: 'course_name', render: (name, row) => editField(row, 'course_name', name, canEditRecords && row.status !== 'queued' && row.status !== 'running' ? <span style={{ color: '#1f4e8c' }}>{name}</span> : <Link to={`/submissions/${row.id}`}>{name}</Link>) },
+            { title: '年级', dataIndex: 'student_grade', width: 80, render: (grade, row) => editField(row, 'student_grade', String(grade), `${String(grade).slice(-2)}级`, [2023, 2024, 2025, 2026].map((n) => ({ value: String(n), label: `${String(n).slice(-2)}级` }))) },
+            { title: '专业', dataIndex: 'major', width: 180, render: (major, row) => editField(row, 'major', major, major, ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能'].map((name) => ({ value: name, label: name }))) },
             ...(scope === 'college' ? [{ title: '上传人', width: 150, render: (_: unknown, row: Row) => <div>{row.user_name}<div className="muted small">{row.username}</div></div> }] : []),
-            { title: '次数', dataIndex: 'seq', width: 75, render: (seq, row) => <EditableNumber name={`上传次数-${row.id}`} value={seq} min={1} format={(n) => `第${n}次`} onSave={async (next) => { await api.put(`/api/admin/submissions/${row.id}/sequence`, { seq: next }); await load(); }} /> },
-            { title: '文件', dataIndex: 'file_name', width: 210, ellipsis: true, render: (name, row) => <Tooltip title={name}>{name} <span className="muted small">{fmtSize(row.file_size)}</span></Tooltip> },
-            { title: '检查结果', width: 115, render: (_, row) => <SubmissionTag status={row.status} verdict={row.verdict} /> },
+            { title: '次数', dataIndex: 'seq', width: 75, render: (seq, row) => <EditableNumber name={`上传次数-${row.id}`} value={seq} min={1} editable={canEditRecords} format={(n) => `第${n}次`} onSave={async (next) => { await api.put(`/api/submissions/${row.id}/sequence`, { seq: next }); await load(); }} /> },
+            { title: '文件', dataIndex: 'file_name', width: 210, ellipsis: true, render: (name, row) => editField(row, 'file_name', name, <Tooltip title={name}>{name} <span className="muted small">{fmtSize(row.file_size)}</span></Tooltip>) },
+            { title: '检查结果', width: 115, render: (_, row) => editField(row, 'verdict', row.verdict ?? '', <SubmissionTag status={row.status} verdict={row.verdict} />, [{ value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }]) },
             { title: '结果上传状态', width: 165, render: (_, row) => <><ConfirmationTag confirmedAt={row.confirmed_at} status={row.status} />{row.confirmed_at && <div className="muted small">{row.confirmed_at}</div>}</> },
             { title: '文件上传时间', dataIndex: 'created_at', width: 170 },
             {

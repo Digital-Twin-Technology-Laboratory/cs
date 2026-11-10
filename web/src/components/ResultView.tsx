@@ -48,6 +48,7 @@ export default function ResultView({ sub, items, sections }: Props) {
   const major = r.issues.filter((i) => i.nature !== '建议修改');
   const suggest = r.issues.filter((i) => i.nature === '建议修改');
   const itemMap = new Map(items.map((i) => [i.code, i]));
+  const verdictEditNote = sub.verdict_edited_at ? `检查结论由${sub.verdict_edited_by}于${sub.verdict_edited_at}手工修改；以下保留原 AI 检查意见。` : '';
 
   const copy = async () => {
     const { text } = await api.get<{ text: string }>(`/api/submissions/${sub.id}/report.txt`);
@@ -100,9 +101,9 @@ export default function ResultView({ sub, items, sections }: Props) {
           </Space>
         </div>
         {sub.verdict === 'passed' ? (
-          <Alert style={{ marginTop: 16 }} type="success" showIcon title="检查通过" description="未发现明确问题或重大问题。如有建议修改和需核实事项，可结合实际情况完善。" />
+          <Alert style={{ marginTop: 16 }} type="success" showIcon title="检查通过" description={verdictEditNote || '未发现明确问题或重大问题。如有建议修改和需核实事项，可结合实际情况完善。'} />
         ) : (
-          <Alert style={{ marginTop: 16 }} type="error" showIcon title="未通过" description="请按下方“明确问题及重大问题”修改后，重新上传大纲进行检查。每次上传都会独立检查。" />
+          <Alert style={{ marginTop: 16 }} type="error" showIcon title="未通过" description={verdictEditNote || '请按下方“明确问题及重大问题”修改后，重新上传大纲进行检查。每次上传都会独立检查。'} />
         )}
         {r.summary && (
           <div className="note-box" style={{ marginTop: 12 }}>
@@ -117,6 +118,7 @@ export default function ResultView({ sub, items, sections }: Props) {
         <p className="report-meta">专业：{sub.course.major}　培养类型：{sub.course.trainingType}　检查次数：第{sub.seq}次　检查时间：{sub.finished_at}</p>
         {sub.course.adjustNote && <p className="report-meta">对照方案调整说明：{sub.course.adjustNote}</p>}
         <p className="report-meta"><b>检查结论：</b>{sub.verdict === 'passed' ? '检查通过' : '未通过，需修改后重新提交'}</p>
+        {verdictEditNote && <p className="report-meta">{verdictEditNote}</p>}
         <h3 className="report-section">一 明确问题及重大问题</h3>
         {major.length ? major.map((i, n) => <IssueCard key={n} n={n + 1} label="A" issue={i} />) : <p>无。</p>}
 

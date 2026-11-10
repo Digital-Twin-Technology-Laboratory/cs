@@ -118,6 +118,8 @@ export interface SubmissionDetail {
   confirmed_at: string | null;
   confirmed_by: string;
   canConfirm: boolean;
+  verdict_edited_at: string | null;
+  verdict_edited_by: string;
   course: CourseInfo;
   result: CheckResult | null;
   queuePosition: number | null;

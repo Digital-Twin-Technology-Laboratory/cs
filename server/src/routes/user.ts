@@ -232,6 +232,8 @@ type SubFull = {
   status: string; error: string | null; verdict: 'passed' | 'failed' | null; result_json: string | null; created_at: string; started_at: string | null; finished_at: string | null;
   confirmed_at: string | null;
   confirmed_by: string;
+  verdict_edited_at: string | null;
+  verdict_edited_by: string;
 };
 
 function getOwnSub(req: Request, res: Response): SubFull | null {
@@ -276,6 +278,70 @@ userRouter.get('/submissions', (req, res) => {
      FROM submissions s JOIN users u ON u.id = s.user_id WHERE ${w} ORDER BY s.id DESC LIMIT ? OFFSET ?`,
   ).all(...args, pageSize, (page - 1) * pageSize);
   res.json({ total, rows });
+});
+
+userRouter.put('/submissions/:id', (req, res) => {
+  if (req.user!.role !== 'admin' && req.user!.college_role !== 'teaching') return res.status(403).json({ error: '仅管理员或教学条线（全院）可修改上传记录' });
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const body = z.object({
+    course_name: courseSchema.shape.name.optional(),
+    major: courseSchema.shape.major.optional(),
+    student_grade: courseSchema.shape.studentGrade.optional(),
+    file_name: z.string().trim().min(1, '文件名不能为空').max(255).optional(),
+    verdict: z.enum(['passed', 'failed']).optional(),
+  }).strict().refine((value) => Object.keys(value).length > 0, '请填写要修改的内容').parse(req.body);
+  const before = db.prepare('SELECT * FROM submissions WHERE id = ?').get(id) as SubFull | undefined;
+  if (!before) return res.status(404).json({ error: '记录不存在' });
+  if (before.status === 'queued' || before.status === 'running') return res.status(409).json({ error: '检查进行中，请完成后再修改记录' });
+  if (body.verdict !== undefined && (before.status !== 'done' || !before.result_json)) {
+    return res.status(400).json({ error: '检查尚未完成，不能修改检查结论' });
+  }
+  const previousCourse = JSON.parse(before.course_snapshot) as CourseSnapshot;
+  const course = { ...previousCourse,
+    name: body.course_name ?? previousCourse.name,
+    major: body.major ?? previousCourse.major,
+    studentGrade: body.student_grade ?? previousCourse.studentGrade,
+  };
+  if (body.major !== undefined) {
+    if (body.major === '计算机科学与技术（专转本）') course.trainingType = '专转本';
+    else if (previousCourse.major === '计算机科学与技术（专转本）') course.trainingType = '普通本科';
+  }
+  const fileName = body.file_name ?? before.file_name;
+  const verdict = body.verdict ?? before.verdict;
+  db.transaction(() => {
+    if (body.course_name !== undefined || body.major !== undefined || body.student_grade !== undefined) {
+      db.prepare("UPDATE courses SET name = COALESCE(?, name), major = COALESCE(?, major), student_grade = COALESCE(?, student_grade), training_type = COALESCE(?, training_type), updated_at = datetime('now','localtime') WHERE id = ?")
+        .run(body.course_name, body.major, body.student_grade, body.major !== undefined ? course.trainingType : undefined, before.course_id);
+    }
+    db.prepare('UPDATE submissions SET course_snapshot = ?, file_name = ?, verdict = ? WHERE id = ?')
+      .run(JSON.stringify(course), fileName, verdict, id);
+    if (body.major !== undefined) {
+      const plan = findPlan(course.major, course.trainingType, course.planGrade);
+      db.prepare('UPDATE submissions SET plan_id = ?, plan_name = ? WHERE id = ?').run(plan?.id, plan?.name, id);
+    }
+    if (body.verdict !== undefined && body.verdict !== before.verdict) {
+      db.prepare("UPDATE submissions SET verdict_edited_at = datetime('now','localtime'), verdict_edited_by = ? WHERE id = ?")
+        .run(`${req.user!.name}（${req.user!.username}）`, id);
+    }
+    audit(req.user, '修改上传记录', `记录#${id}`, JSON.stringify({
+      before: { course: previousCourse, file_name: before.file_name, verdict: before.verdict },
+      after: { course, file_name: fileName, verdict },
+    }), req.ip);
+  })();
+  res.json({ ok: true });
+});
+
+userRouter.put('/submissions/:id/sequence', (req, res) => {
+  if (req.user!.role !== 'admin' && req.user!.college_role !== 'teaching') return res.status(403).json({ error: '仅管理员或教学条线（全院）可修改上传记录' });
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const { seq } = z.object({ seq: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).parse(req.body);
+  const before = db.prepare('SELECT seq FROM submissions WHERE id = ?').get(id) as { seq: number } | undefined;
+  if (!before) return res.status(404).json({ error: '记录不存在' });
+  db.transaction(() => {
+    db.prepare('UPDATE submissions SET seq = ? WHERE id = ?').run(seq, id);
+    audit(req.user, '修改上传次数', `记录#${id}`, JSON.stringify({ before: before.seq, after: seq }), req.ip);
+  })();
+  res.json({ ok: true });
 });
 
 userRouter.get('/submissions/:id', (req, res) => {
@@ -330,6 +396,7 @@ function reportInput(s: SubFull): ReportInput | null {
     checkedAt: s.finished_at ?? s.created_at,
     verdict: s.verdict,
     result: JSON.parse(s.result_json) as CheckResult,
+    verdictEdit: s.verdict_edited_at ? { by: s.verdict_edited_by, at: s.verdict_edited_at } : null,
   };
 }
 

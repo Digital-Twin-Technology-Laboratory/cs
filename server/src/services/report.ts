@@ -9,6 +9,7 @@ export interface ReportInput {
   checkedAt: string;
   verdict: 'passed' | 'failed';
   result: CheckResult;
+  verdictEdit?: { by: string; at: string } | null;
 }
 
 const verdictText = (v: ReportInput['verdict']) => v === 'passed' ? '检查通过' : '未通过，需修改后重新提交';
@@ -18,6 +19,7 @@ const reportTitle = (r: ReportInput) => `《${r.course.name}》教学大纲检�
 const reportScope = (r: ReportInput) => `检查对象：${r.course.studentGrade}级《${r.course.name}》教学大纲。对照方案：${planLabel(r)}。`;
 const reportMeta = (r: ReportInput) => `专业：${r.course.major}　培养类型：${r.course.trainingType}　检查次数：第${r.seq}次　检查时间：${r.checkedAt}`;
 const REPORT_NOTE = '注：本结果由 AI 依据教学大纲检查清单生成，供修改参考；问题编号仅用于识别和引用，不代表整改顺序。';
+const verdictEditNote = (r: ReportInput) => r.verdictEdit ? `检查结论由${r.verdictEdit.by}于${r.verdictEdit.at}手工修改；以下保留原 AI 检查意见。` : '';
 
 function split(r: CheckResult) {
   return {
@@ -31,6 +33,7 @@ export function reportText(r: ReportInput): string {
   const lines = [reportTitle(r), '', reportScope(r), reportMeta(r)];
   if (r.course.adjustNote) lines.push(`对照方案调整说明：${r.course.adjustNote}`);
   lines.push(`检查结论：${verdictText(r.verdict)}`, '');
+  if (r.verdictEdit) lines.push(verdictEditNote(r), '');
   for (const [title, prefix, issues] of [
     ['一 明确问题及重大问题', 'A', major],
     ['二 建议修改项', 'B', suggest],
@@ -72,6 +75,7 @@ export async function reportDocx(r: ReportInput): Promise<Buffer> {
   ];
   if (r.course.adjustNote) children.push(field('对照方案调整说明', r.course.adjustNote, 20));
   children.push(field('检查结论', verdictText(r.verdict), 20, 140));
+  if (r.verdictEdit) children.push(new Paragraph({ children: [run(verdictEditNote(r), false, 20)] }));
 
   for (const [title, prefix, issues] of [
     ['一 明确问题及重大问题', 'A', major],

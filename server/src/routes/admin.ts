@@ -369,18 +369,6 @@ adminRouter.get('/submissions', (req, res) => {
   res.json({ total, rows });
 });
 
-adminRouter.put('/submissions/:id/sequence', (req, res) => {
-  const id = idParam(req.params.id);
-  const { seq } = z.object({ seq: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).parse(req.body);
-  const before = db.prepare('SELECT seq FROM submissions WHERE id = ?').get(id) as { seq: number } | undefined;
-  if (!before) return res.status(404).json({ error: '记录不存在' });
-  db.transaction(() => {
-    db.prepare('UPDATE submissions SET seq = ? WHERE id = ?').run(seq, id);
-    audit(req.user, '修改上传次数', `记录#${id}`, JSON.stringify({ before: before.seq, after: seq }), req.ip);
-  })();
-  res.json({ ok: true });
-});
-
 adminRouter.delete('/submissions/:id', (req, res) => {
   const id = idParam(req.params.id);
   const s = db.prepare('SELECT s.*, c.name AS course_name FROM submissions s JOIN courses c ON c.id = s.course_id WHERE s.id = ?').get(id) as

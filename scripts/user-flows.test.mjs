@@ -416,7 +416,6 @@ test('account activation, daily check quota and checklist download', { timeout: 
       database.prepare('UPDATE users SET demo_editor = 1 WHERE id = ?').run(userId);
       assert.equal((await request('/api/auth/me')).data.user.demo_editor, undefined);
       assert.equal((await request('/api/statistic-overrides', statistic, 'PUT')).status, 403);
-      assert.equal((await request(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 403);
       if (username === 'number-tang') {
         assert.equal((await admin(`/api/admin/users/${userId}`, { role: 'admin' }, 'PUT')).status, 200);
         assert.equal((await request('/api/statistic-overrides', statistic, 'PUT')).status, 200);
@@ -439,17 +438,94 @@ test('account activation, daily check quota and checklist download', { timeout: 
     });
     assert.equal(reopened.status, 0, reopened.stderr);
     assert.ok((await teacher('/api/statistic-overrides')).data.rows.some((row) => row.value === 3));
-    assert.equal((await teacher(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 403);
-    assert.equal((await admin(`/api/admin/submissions/${id}/sequence`, { seq: 0 }, 'PUT')).status, 400);
-    assert.equal((await admin('/api/admin/submissions/999999/sequence', { seq: 5 }, 'PUT')).status, 404);
-    assert.equal((await admin(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 200);
-    assert.equal((await teacher(`/api/submissions/${id}`)).data.submission.seq, 5);
-    assert.match((await teacher(`/api/submissions/${id}/report.txt`)).data.text, /检查次数：第5次/);
     assert.deepEqual(database.prepare('SELECT verdict, result_json, confirmed_at FROM submissions WHERE id = ?').get(id), before);
     assert.equal((await admin('/api/statistic-overrides', { ...statistic, value: null }, 'PUT')).status, 200);
     assert.ok(!(await admin('/api/statistic-overrides')).data.rows.some((row) => row.scope === 'college'));
     assert.ok(database.prepare("SELECT 1 FROM audit_logs WHERE action = '修改统计数字'").get());
-    assert.ok(database.prepare("SELECT 1 FROM audit_logs WHERE action = '修改上传次数'").get());
+  });
+
+  await t.test('admins and college teaching staff can persist record edits, with reports and progress following the saved verdict', async () => {
+    const teaching = client();
+    const editor = (await teaching('/api/auth/register', { username: 'record-editor', name: 'Record Editor', password: 'editor12345' })).data.user;
+    assert.equal(editor.role, 'user');
+    assert.equal((await admin(`/api/admin/users/${editor.id}`, { college_role: 'teaching' }, 'PUT')).status, 200);
+    const requirementId = Number(database.prepare("INSERT INTO outline_requirements (source_key, course_name, professional, writer_user_id) VALUES ('record-edit', 'Editable Course', '人工智能', ?)").run(teacherId).lastInsertRowid);
+    const form = uploadForm();
+    form.set('name', 'Editable Course');
+    form.set('outlineRequirementId', String(requirementId));
+    const uploaded = await teacher('/api/submissions', form);
+    assert.equal(uploaded.status, 200);
+    const id = uploaded.data.submissionId;
+    await waitFor(() => database.prepare('SELECT status FROM submissions WHERE id = ?').get(id).status === 'done');
+    const result = { summary: 'Original AI summary', itemResults: [], issues: [{ nature: '明确问题', itemCodes: [], title: 'Original issue', location: 'Section 1', problem: 'Original problem', advice: 'Original advice' }], toVerify: [] };
+    database.prepare("UPDATE submissions SET verdict = 'failed', result_json = ? WHERE id = ?").run(JSON.stringify(result), id);
+    assert.equal((await teacher(`/api/submissions/${id}/confirm`, {})).status, 200);
+    const before = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
+    const transferPlanId = Number(database.prepare("INSERT INTO training_plans (major, training_type, grade, name) VALUES ('计算机科学与技术（专转本）', '专转本', 2025, 'Transfer Plan')").run().lastInsertRowid);
+    const url = `/api/submissions/${id}`;
+    assert.equal((await client()(url, { verdict: 'passed' }, 'PUT')).status, 401);
+    assert.equal((await teacher(url, { verdict: 'passed' }, 'PUT')).status, 403);
+    assert.equal((await teacher(`${url}/sequence`, { seq: 5 }, 'PUT')).status, 403);
+    assert.equal((await admin(`/api/admin/submissions/${id}/sequence`, { seq: 5 }, 'PUT')).status, 404);
+    for (const body of [{}, { verdict: 'invalid' }, { major: 'invalid' }, { student_grade: 2030 }, { file_name: ' ' }, { course_name: '' }, { result_json: '{}' }, { status: 'done' }]) {
+      assert.equal((await teaching(url, body, 'PUT')).status, 400);
+    }
+    assert.equal((await teaching('/api/submissions/999999', { verdict: 'passed' }, 'PUT')).status, 404);
+    for (const status of ['queued', 'running', 'failed']) {
+      database.prepare('UPDATE submissions SET status = ? WHERE id = ?').run(status, id);
+      assert.equal((await teaching(url, { verdict: 'passed' }, 'PUT')).status, status === 'failed' ? 400 : 409);
+    }
+    database.prepare("UPDATE submissions SET status = 'done' WHERE id = ?").run(id);
+    const edit = { course_name: 'Edited Course', major: '计算机科学与技术（专转本）', student_grade: 2024, file_name: 'edited.docx', verdict: 'passed' };
+    assert.equal((await teaching(url, edit, 'PUT')).status, 200);
+    assert.equal((await teaching(`${url}/sequence`, { seq: 0 }, 'PUT')).status, 400);
+    assert.equal((await teaching('/api/submissions/999999/sequence', { seq: 5 }, 'PUT')).status, 404);
+    assert.equal((await teaching(`${url}/sequence`, { seq: 5 }, 'PUT')).status, 200);
+    const saved = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
+    for (const key of ['result_json', 'file_path', 'file_size', 'extracted_text', 'confirmed_at', 'confirmed_by', 'outline_requirement_id', 'status']) assert.equal(saved[key], before[key], key);
+    assert.equal(saved.plan_id, transferPlanId);
+    assert.equal(saved.plan_name, 'Transfer Plan');
+    assert.ok(saved.verdict_edited_at);
+    assert.equal(saved.verdict_edited_by, 'Record Editor（record-editor）');
+    const detail = (await teacher(url)).data.submission;
+    assert.equal(detail.verdict, 'passed');
+    assert.equal(detail.seq, 5);
+    assert.equal(detail.course.name, edit.course_name);
+    assert.equal(detail.course.major, edit.major);
+    assert.equal(detail.course.trainingType, '专转本');
+    assert.equal(detail.course.studentGrade, 2024);
+    assert.equal(detail.file_name, edit.file_name);
+    assert.deepEqual(detail.result, result);
+    assert.equal((await teacher('/api/progress')).data.courses.find((course) => course.id === requirementId).verdict, 'passed');
+    const course = (await teacher(`/api/courses/${before.course_id}`)).data.course;
+    assert.equal(course.name, edit.course_name);
+    assert.equal(course.major, edit.major);
+    assert.equal(course.student_grade, 2024);
+    assert.equal(course.training_type, '专转本');
+    const text = (await teacher(`${url}/report.txt`)).data.text;
+    const word = await teacher(`${url}/report.docx`);
+    assert.equal(word.status, 200);
+    const extracted = (await mammoth.extractRawText({ buffer: word.data })).value;
+    for (const report of [text, extracted]) {
+      for (const content of ['Edited Course', 'Transfer Plan', '检查结论：检查通过', '检查次数：第5次', 'Record Editor（record-editor）', '手工修改', 'Original issue', 'Original problem']) assert.ok(report.includes(content), content);
+    }
+    assert.deepEqual((await teacher(`${url}/file`)).data, syllabus);
+    const audit = database.prepare("SELECT detail FROM audit_logs WHERE action = '修改上传记录' AND target = ? ORDER BY id DESC LIMIT 1").get(`记录#${id}`);
+    assert.equal(JSON.parse(audit.detail).before.verdict, 'failed');
+    assert.equal(JSON.parse(audit.detail).after.verdict, 'passed');
+    assert.ok(database.prepare("SELECT 1 FROM audit_logs WHERE action = '修改上传次数' AND target = ?").get(`记录#${id}`));
+    assert.equal((await teaching(url, { major: '人工智能', verdict: 'failed' }, 'PUT')).status, 200);
+    assert.equal((await teacher(url)).data.submission.course.trainingType, '普通本科');
+    assert.equal((await teacher('/api/progress')).data.courses.find((course) => course.id === requirementId).verdict, 'failed');
+    assert.equal((await admin(`/api/admin/users/${editor.id}`, { college_role: 'program' }, 'PUT')).status, 200);
+    assert.equal((await teaching(url, { verdict: 'passed' }, 'PUT')).status, 403);
+    assert.equal((await teaching(`${url}/sequence`, { seq: 6 }, 'PUT')).status, 403);
+    assert.equal((await admin(url, { verdict: 'passed' }, 'PUT')).status, 200);
+    assert.equal((await admin(`${url}/sequence`, { seq: 6 }, 'PUT')).status, 200);
+    const adminEdit = (await teacher(url)).data.submission;
+    assert.equal(adminEdit.verdict, 'passed');
+    assert.equal(adminEdit.seq, 6);
+    assert.equal(adminEdit.verdict_edited_by, 'Test Admin（testadmin）');
   });
 
   await t.test('download includes all active checklist content and follows version changes', async () => {

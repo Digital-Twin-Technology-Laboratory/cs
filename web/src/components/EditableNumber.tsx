@@ -45,12 +45,13 @@ export function useStoredNumber() {
   return (scope: string, name: string, fallback: number) => values[numberKey(scope, name)] ?? fallback;
 }
 
-export function EditableNumber({ value, name, min = 0, onSave, format = String }: {
-  value: number; name: string; min?: number;
+export function EditableNumber({ value, name, min = 0, onSave, format = String, editable }: {
+  value: number; name: string; min?: number; editable?: boolean;
   onSave: (value: number | null) => Promise<void>;
   format?: (value: number) => ReactNode;
 }) {
   const { user } = useAuth();
+  const canEdit = editable ?? user?.role === 'admin';
   const { message } = App.useApp();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<number | null>(value);
@@ -66,11 +67,11 @@ export function EditableNumber({ value, name, min = 0, onSave, format = String }
     } catch (e) { message.error((e as Error).message); }
     finally { setSaving(false); }
   };
-  if (editing && user?.role === 'admin') return <InputNumber autoFocus aria-label={name} min={min} precision={0}
+  if (editing && canEdit) return <InputNumber autoFocus aria-label={name} min={min} precision={0}
     value={draft} disabled={saving} style={{ width: 85 }} onChange={setDraft}
     onPressEnter={(e) => (e.target as HTMLInputElement).blur()} onBlur={save}
     onKeyDown={(e) => { if (e.key === 'Escape') { cancelled.current = true; setEditing(false); } }} />;
-  return <span onDoubleClick={user?.role === 'admin' ? () => { cancelled.current = false; setDraft(value); setEditing(true); } : undefined}>{format(value)}</span>;
+  return <span onDoubleClick={canEdit ? () => { cancelled.current = false; setDraft(value); setEditing(true); } : undefined}>{format(value)}</span>;
 }
 
 export default function StoredNumber({ scope, name, value }: Override) {
