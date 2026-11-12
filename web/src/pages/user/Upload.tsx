@@ -102,7 +102,7 @@ export default function Upload() {
       <div className="page-head">
         <div>
           <h1>上传检查</h1>
-          <div className="sub">支持一次选择多个大纲，每个文件一行，分别选择年级和专业。检查完成后，请查看结果并确认上传。</div>
+          <div className="sub">支持一次选择多个大纲，每个文件一行，分别选择年级和专业。检查完成后，请查看结果并确认提交。</div>
         </div>
         <Link to="/submissions"><Button>查看上传记录</Button></Link>
       </div>
@@ -190,7 +190,7 @@ export default function Upload() {
                             { name: ['outlines', file.uid, 'outlineRequirementId'], value: option.requirementId },
                           ])}
                           filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
-                          <Input maxLength={100} placeholder="输入课程名或从下拉列表选择任务" aria-label={`${file.name}的课程名称`} />
+                          <Input maxLength={100} placeholder="可自由填写课程名，也可从下拉列表选择" aria-label={`${file.name}的课程名称`} />
                         </AutoComplete>
                       </Form.Item>
                     </>
@@ -232,7 +232,7 @@ export default function Upload() {
               ]}
             />
           )}
-          {files.length > 0 && <p className="muted small">系统优先按当前登录账号、课程名称和专业自动关联应交任务；无法唯一匹配或需代他人上传时，请点击“课程名称”输入框，从下拉列表中选择具体课程、课程组及执笔人，系统会填入审核专业。不同执笔人的同名课程分别计入各自进度。执笔人尚未指定也可上传，系统记录实际上传人并同步课程组进度。系统按每行专业匹配培养方案，未预置方案时仍可检查；名单外课程也可手工填写上传。</p>}
+          {files.length > 0 && <p className="muted small">云清单仅用于总览展示和进度统计，不限制上传账号、课程或执笔人。课程名称可自由填写，也可从下拉列表选择；匹配明确时自动关联应交任务，无法明确关联时仍可上传并保留检查记录，不误计入其他任务的进度。系统按每行专业匹配培养方案，未预置方案时仍可检查，方案比对项列为需核实。</p>}
           <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
             {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>

@@ -136,7 +136,7 @@ export const COURSE_LIST_SQL = `
   SELECT c.*, u.username, u.name AS user_name,
     (SELECT COUNT(*) FROM submissions s WHERE s.course_id = c.id) AS submission_count,
     ls.id AS latest_id, ls.status AS latest_status, ls.verdict AS latest_verdict, ls.created_at AS latest_at,
-    ls.confirmed_at AS latest_confirmed_at
+    ls.confirmed_at AS latest_confirmed_at, ls.withdrawn_at AS latest_withdrawn_at
   FROM courses c
   JOIN users u ON u.id = c.user_id
   LEFT JOIN submissions ls ON ls.id = (SELECT MAX(id) FROM submissions WHERE course_id = c.id)`;
@@ -150,7 +150,7 @@ userRouter.get('/courses/:id', (req, res) => {
   const c = getOwnCourse(req, res);
   if (!c) return;
   const subs = db
-    .prepare('SELECT id, seq, file_name, file_size, status, verdict, error, created_at, finished_at, confirmed_at FROM submissions WHERE course_id = ? ORDER BY id DESC')
+    .prepare('SELECT id, seq, file_name, file_size, status, verdict, error, created_at, finished_at, confirmed_at, withdrawn_at FROM submissions WHERE course_id = ? ORDER BY id DESC')
     .all(c.id);
   const plan = findPlan(c.major, c.training_type, c.plan_grade);
   res.json({ course: c, submissions: subs, plan: plan ? { id: plan.id, name: plan.name } : null });
@@ -185,15 +185,11 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
       AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
         OR (? = '计算机科学与技术（专转本）' AND professional = '专转本'))`)
       .all(body.name, body.major, body.major, body.major) as { id: number; writer_user_id: number | null }[];
-    if (body.outlineRequirementId !== undefined && !requirements.some((r) => r.id === body.outlineRequirementId)) {
-      return res.status(400).json({ error: '所选应交课程与课程名称、审核专业不一致，请在“课程名称”输入框的下拉列表中重新选择' });
-    }
     const ownRequirements = requirements.filter((r) => r.writer_user_id === req.user!.id);
     const matchingRequirements = ownRequirements.length ? ownRequirements : requirements;
-    if (body.outlineRequirementId === undefined && matchingRequirements.length > 1) {
-      return res.status(400).json({ error: '同名课程存在多个应交任务，请点击“课程名称”输入框，从下拉列表中选择具体课程组及执笔人' });
-    }
-    const requirementId = body.outlineRequirementId ?? matchingRequirements[0]?.id ?? null;
+    // 云清单只用于关联进度，匹配不明确或选择已失效时也允许上传。
+    const requirementId = requirements.find((r) => r.id === body.outlineRequirementId)?.id
+      ?? (matchingRequirements.length === 1 ? matchingRequirements[0].id : null);
 
     let text: string;
     try {
@@ -246,6 +242,7 @@ type SubFull = {
   status: string; error: string | null; verdict: 'passed' | 'failed' | null; result_json: string | null; created_at: string; started_at: string | null; finished_at: string | null;
   confirmed_at: string | null;
   confirmed_by: string;
+  withdrawn_at: string | null;
   verdict_edited_at: string | null;
   verdict_edited_by: string;
 };
@@ -265,7 +262,7 @@ userRouter.get('/submissions', (req, res) => {
     pageSize: z.coerce.number().int().min(1).max(200).default(20),
     q: z.string().trim().max(200).default(''),
     status: z.enum(['queued', 'running', 'done', 'failed']).optional(),
-    confirmation: z.enum(['pending', 'confirmed']).optional(),
+    confirmation: z.enum(['pending', 'confirmed', 'withdrawn']).optional(),
     scope: z.enum(['mine', 'college']).default('mine'),
     major: z.string().trim().max(100).optional(),
     studentGrade: z.coerce.number().int().optional(),
@@ -295,11 +292,12 @@ userRouter.get('/submissions', (req, res) => {
   if (to) where.push('date(s.created_at) <= ?'), args.push(to);
   if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
   if (confirmation === 'confirmed') where.push('s.confirmed_at IS NOT NULL');
+  if (confirmation === 'withdrawn') where.push('s.withdrawn_at IS NOT NULL');
   const w = where.join(' AND ');
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM submissions s JOIN users u ON u.id = s.user_id WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db.prepare(
     `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error,
-      s.created_at, s.finished_at, s.confirmed_at, u.username, u.name AS user_name,
+      s.created_at, s.finished_at, s.confirmed_at, s.withdrawn_at, u.username, u.name AS user_name,
       json_extract(s.course_snapshot, '$.name') AS course_name,
       json_extract(s.course_snapshot, '$.major') AS major,
       json_extract(s.course_snapshot, '$.trainingType') AS training_type,
@@ -432,15 +430,29 @@ userRouter.post('/submissions/:id/confirm', (req, res) => {
   const isLeader = supervisesOutlineSubmission(req.user!, s.id, true, true);
   if (s.user_id !== req.user!.id && !isLeader) return res.status(403).json({ error: '只能确认本人结果或本组应交大纲的最新结果' });
   if (s.status !== 'done' || !s.result_json || !s.verdict) {
-    return res.status(400).json({ error: '检查完成后才能确认上传结果' });
+    return res.status(400).json({ error: '检查完成后才能确认提交' });
   }
   const confirmedAt = db.transaction(() => {
     const actor = `${isLeader ? '课程组长' : '上传者'}：${req.user!.name}（${req.user!.username}）`;
-    const updated = db.prepare("UPDATE submissions SET confirmed_at = datetime('now','localtime'), confirmed_by = ? WHERE id = ? AND confirmed_at IS NULL").run(actor, s.id);
-    if (updated.changes) audit(req.user, isLeader ? '课程组长最终确认' : '确认上传结果', `记录#${s.id}`, actor, req.ip);
+    const updated = db.prepare("UPDATE submissions SET confirmed_at = datetime('now','localtime'), confirmed_by = ?, withdrawn_at = NULL WHERE id = ? AND confirmed_at IS NULL").run(actor, s.id);
+    if (updated.changes) audit(req.user, isLeader ? '课程组长最终确认' : '确认提交', `记录#${s.id}`, actor, req.ip);
     return (db.prepare('SELECT confirmed_at FROM submissions WHERE id = ?').get(s.id) as { confirmed_at: string }).confirmed_at;
   })();
   res.json({ ok: true, confirmedAt });
+});
+
+userRouter.post('/submissions/:id/withdraw', (req, res) => {
+  const s = getOwnSub(req, res);
+  if (!s) return;
+  if (s.user_id !== req.user!.id) return res.status(403).json({ error: '只能撤回本人上传的结果' });
+  if (!s.confirmed_at) return res.status(409).json({ error: '仅已确认提交的结果可以撤回上传' });
+  const withdrawn = db.transaction(() => {
+    const row = db.prepare("UPDATE submissions SET confirmed_at = NULL, confirmed_by = '', withdrawn_at = datetime('now','localtime') WHERE id = ? RETURNING withdrawn_at")
+      .get(s.id) as { withdrawn_at: string };
+    audit(req.user, '撤回上传', `记录#${s.id}`, JSON.stringify({ confirmedAt: s.confirmed_at, confirmedBy: s.confirmed_by }), req.ip);
+    return row;
+  })();
+  res.json({ ok: true, withdrawnAt: withdrawn.withdrawn_at });
 });
 
 userRouter.get('/submissions/:id/file', (req, res) => {

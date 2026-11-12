@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import fs from 'node:fs/promises';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import path from 'node:path';
 import bcrypt from 'bcryptjs';
+import JSZip from 'jszip';
 import { z } from 'zod';
+import { DATA_DIR, TMP_DIR } from '../config.js';
 import { applyDefaultGroupView, applyDefaultProfessionalView, audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
 import { DEFAULT_AI_SETTINGS, getSettings, saveSettings, type AiSettings } from '../settings.js';
@@ -359,12 +363,13 @@ adminRouter.get('/submissions', (req, res) => {
   if (to) where.push('date(s.created_at) <= ?'), args.push(to);
   if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
   if (confirmation === 'confirmed') where.push('s.confirmed_at IS NOT NULL');
+  if (confirmation === 'withdrawn') where.push('s.withdrawn_at IS NOT NULL');
   const w = where.join(' AND ');
   const join = 'FROM submissions s JOIN users u ON u.id = s.user_id';
   const total = (db.prepare(`SELECT COUNT(*) AS n ${join} WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db
     .prepare(
-      `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error, s.ai_model, s.created_at, s.finished_at, s.confirmed_at, s.plan_name,
+      `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error, s.ai_model, s.created_at, s.finished_at, s.confirmed_at, s.withdrawn_at, s.plan_name,
         json_extract(s.course_snapshot, '$.name') AS course_name,
         json_extract(s.course_snapshot, '$.major') AS major,
         json_extract(s.course_snapshot, '$.trainingType') AS training_type,
@@ -761,6 +766,34 @@ adminRouter.post('/ai/test', async (req, res) => {
 });
 
 // ---------- 系统设置 ----------
+adminRouter.get('/backup', async (req, res) => {
+  const temporary = mkdtempSync(path.join(TMP_DIR, 'backup-'));
+  const zip = new JSZip();
+  try {
+    // Capture files before yielding so uploads/deletions cannot interleave with the snapshot.
+    const snapshot = path.join(temporary, 'app.db');
+    db.prepare('VACUUM INTO ?').run(snapshot);
+    zip.file('data/app.db', readFileSync(snapshot));
+    zip.file('data/secret.key', readFileSync(path.join(DATA_DIR, 'secret.key')));
+    for (const directory of ['uploads', 'plans']) {
+      zip.folder(`data/${directory}`);
+      const folder = path.join(DATA_DIR, directory);
+      for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const file = path.join(entry.parentPath, entry.name);
+        const relative = path.relative(DATA_DIR, file).split(path.sep).join('/');
+        zip.file(`data/${relative}`, readFileSync(file));
+      }
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+  const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  const filename = `teaching-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+  audit(req.user, '下载数据备份', filename, undefined, req.ip);
+  res.set('Cache-Control', 'no-store').attachment(filename).send(buffer);
+});
+
 adminRouter.get('/site', (_req, res) => res.json(getSettings('site')));
 
 adminRouter.put('/site', (req, res) => {

@@ -1,4 +1,5 @@
 import { App, Button, Card, Form, Input, InputNumber, Radio, Select } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
 import { useEffect } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
@@ -53,6 +54,11 @@ export default function SiteSettings() {
             <InputNumber min={1} max={200} suffix="MB" style={{ width: 160 }} />
           </Form.Item>
         </Form>
+      </Card>
+      <Card title="数据备份" style={{ marginTop: 16 }}>
+        <p>下载完整备份，包含账号与检查记录、上传原文件、培养方案和加密密钥。</p>
+        <Button icon={<DownloadOutlined />} href="/api/admin/backup">下载备份</Button>
+        <p className="muted small">生成备份需要一些时间，请等待浏览器开始下载。备份含敏感数据，请妥善保管并另存到其他设备。</p>
       </Card>
     </div>
   );

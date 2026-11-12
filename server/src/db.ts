@@ -275,6 +275,9 @@ if (!submissionColumns.some((column) => column.name === 'confirmed_at')) {
 if (!submissionColumns.some((column) => column.name === 'confirmed_by')) {
   db.exec("ALTER TABLE submissions ADD COLUMN confirmed_by TEXT NOT NULL DEFAULT ''");
 }
+if (!submissionColumns.some((column) => column.name === 'withdrawn_at')) {
+  db.exec('ALTER TABLE submissions ADD COLUMN withdrawn_at TEXT');
+}
 if (!submissionColumns.some((column) => column.name === 'verdict_edited_at')) {
   db.exec('ALTER TABLE submissions ADD COLUMN verdict_edited_at TEXT');
 }

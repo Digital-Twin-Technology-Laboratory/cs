@@ -1,4 +1,4 @@
-import { App, Button, Card, DatePicker, Empty, Input, Select, Space, Tooltip } from 'antd';
+import { App, Button, Card, DatePicker, Empty, Input, Popconfirm, Select, Space, Tooltip } from 'antd';
 import Table from '../../components/ResponsiveTable';
 import { FileWordOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
@@ -27,6 +27,7 @@ export default function Submissions() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ total: number; rows: Row[] }>({ total: 0, rows: [] });
   const [loading, setLoading] = useState(false);
+  const [withdrawing, setWithdrawing] = useState<number | null>(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -53,6 +54,15 @@ export default function Submissions() {
     setPage(1);
     setFilters((prev) => ({ ...prev, ...patch }));
   };
+  const withdraw = async (id: number) => {
+    setWithdrawing(id);
+    try {
+      await api.post(`/api/submissions/${id}/withdraw`);
+      await load();
+      message.success('已撤回上传，本条记录恢复为未上传');
+    } catch (e) { message.error((e as Error).message); }
+    finally { setWithdrawing(null); }
+  };
   const editField = (row: Row, field: 'course_name' | 'major' | 'student_grade' | 'file_name', value: string, children: React.ReactNode, options?: { value: string; label: string }[]) =>
     <EditableText value={value} name={`${field}-${row.id}`} options={options} disabled={row.status === 'queued' || row.status === 'running'}
       onSave={async (next) => { await api.put(`/api/submissions/${row.id}`, { [field]: field === 'student_grade' ? Number(next) : next }); await load(); }}>{children}</EditableText>;
@@ -62,7 +72,7 @@ export default function Submissions() {
       <div className="page-head">
         <div>
           <h1>{scope === 'college' ? '全院检查记录' : '我的上传记录'}</h1>
-          <div className="sub">{scope === 'college' ? '查看全院所有上传文件和检查结果，包括未关联云清单的记录；不改变应交课程进度统计。' : '所有上传文件、检查结果和确认时间均保留。检查完成后，进入结果详情确认上传。'}</div>
+          <div className="sub">{scope === 'college' ? '查看全院所有上传文件和检查结果，包括未关联云清单的记录；不改变应交课程进度统计。' : '所有上传文件和检查结果均保留。检查完成后，进入结果详情确认提交；提交后可撤回上传。'}</div>
         </div>
         <Link to="/upload"><Button type="primary" icon={<UploadOutlined />}>上传检查</Button></Link>
       </div>
@@ -90,14 +100,15 @@ export default function Submissions() {
             ]}
           />
           <Select
-            aria-label="结果上传状态"
+            aria-label="提交状态"
             value={filters.confirmation}
             onChange={(confirmation) => filter({ confirmation })}
             style={{ width: 150 }}
             options={[
-              { value: '', label: '全部结果上传状态' },
-              { value: 'pending', label: '未确认上传' },
-              { value: 'confirmed', label: '已确认上传' },
+              { value: '', label: '全部提交状态' },
+              { value: 'pending', label: '未提交' },
+              { value: 'confirmed', label: '已提交' },
+              { value: 'withdrawn', label: '已撤回（未上传）' },
             ]}
           />
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
@@ -130,13 +141,16 @@ export default function Submissions() {
                   }} />
               ) : <SubmissionTag status={row.status} verdict={row.verdict} />,
             },
-            { title: '结果上传状态', width: 165, render: (_, row) => <><ConfirmationTag confirmedAt={row.confirmed_at} status={row.status} />{row.confirmed_at && <div className="muted small">{row.confirmed_at}</div>}</> },
+            { title: '提交状态', width: 165, render: (_, row) => <><ConfirmationTag confirmedAt={row.confirmed_at} status={row.status} withdrawnAt={row.withdrawn_at} />{row.confirmed_at && <div className="muted small">{row.confirmed_at}</div>}</> },
             { title: '文件上传时间', dataIndex: 'created_at', width: 170 },
             {
               title: '操作', width: 220,
               render: (_, row) => (
                 <Space size={0}>
-                  <Link to={`/submissions/${row.id}`}><Button type="link" size="small">{scope === 'mine' && row.status === 'done' && !row.confirmed_at ? '查看并确认' : '查看详情'}</Button></Link>
+                  <Link to={`/submissions/${row.id}`}><Button type="link" size="small">{scope === 'mine' && row.status === 'done' && !row.confirmed_at ? '查看并提交' : '查看详情'}</Button></Link>
+                  {scope === 'mine' && row.confirmed_at && <Popconfirm title="撤回上传？" description="本条记录恢复为未上传；若为课程最新结果，应交进度同步恢复未上传。原文件和检查结果保留，可再次确认提交。" okText="撤回上传" onConfirm={() => withdraw(row.id)} okButtonProps={{ loading: withdrawing === row.id }}>
+                    <Button type="link" size="small" danger disabled={withdrawing !== null} loading={withdrawing === row.id}>撤回上传</Button>
+                  </Popconfirm>}
                   {row.status === 'done' && <Button type="primary" ghost size="small" icon={<FileWordOutlined />} onClick={() => download(`/api/submissions/${row.id}/report.docx`)}>下载检查结果</Button>}
                   <Button type="link" size="small" onClick={() => download(`/api/submissions/${row.id}/file`)}>原文件</Button>
                 </Space>

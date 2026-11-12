@@ -29,10 +29,11 @@ export function SubmissionTag({ status, verdict }: { status: SubStatus | null; v
   );
 }
 
-export function ConfirmationTag({ confirmedAt, status }: { confirmedAt: string | null; status: SubStatus | null }) {
-  if (confirmedAt) return <Tag color="success">已确认上传</Tag>;
-  if (status === 'done') return <Tag color="processing">待确认上传</Tag>;
-  return <Tag>未确认上传</Tag>;
+export function ConfirmationTag({ confirmedAt, status, withdrawnAt }: { confirmedAt: string | null; status: SubStatus | null; withdrawnAt?: string | null }) {
+  if (confirmedAt) return <Tag color="success">已提交</Tag>;
+  if (withdrawnAt || !status) return <Tag>未上传</Tag>;
+  if (status === 'done') return <Tag color="processing">待提交</Tag>;
+  return <Tag>未提交</Tag>;
 }
 
 export function NatureTag({ nature }: { nature: string }) {

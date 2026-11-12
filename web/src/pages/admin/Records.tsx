@@ -84,14 +84,15 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
             ]}
           />
           <Select
-            aria-label="结果上传状态"
+            aria-label="提交状态"
             value={f.confirmation}
             onChange={(confirmation) => set({ confirmation })}
             style={{ width: 150 }}
             options={[
-              { value: '', label: '全部结果上传状态' },
-              { value: 'pending', label: '未确认上传' },
-              { value: 'confirmed', label: '已确认上传' },
+              { value: '', label: '全部提交状态' },
+              { value: 'pending', label: '未提交' },
+              { value: 'confirmed', label: '已提交' },
+              { value: 'withdrawn', label: '已撤回（未上传）' },
             ]}
           />
           <DatePicker.RangePicker
@@ -141,7 +142,7 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
               ),
           },
           { title: '对照方案', dataIndex: 'plan_name', width: 120, render: (v) => (v ? <Tooltip title={v}><Tag color="green">已对照</Tag></Tooltip> : <Tag>未预置</Tag>) },
-          { title: '结果上传状态', width: 165, render: (_, r) => <><ConfirmationTag confirmedAt={r.confirmed_at} status={r.status} />{r.confirmed_at && <div className="muted small">{r.confirmed_at}</div>}</> },
+          { title: '提交状态', width: 165, render: (_, r) => <><ConfirmationTag confirmedAt={r.confirmed_at} status={r.status} withdrawnAt={r.withdrawn_at} />{r.confirmed_at && <div className="muted small">{r.confirmed_at}</div>}</> },
           { title: '文件上传时间', dataIndex: 'created_at', width: 165 },
           {
             title: '操作',

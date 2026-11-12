@@ -31,6 +31,7 @@ interface Sub {
   created_at: string;
   finished_at: string | null;
   confirmed_at: string | null;
+  withdrawn_at: string | null;
 }
 
 export const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`);
@@ -123,7 +124,7 @@ export default function CourseDetail() {
               { title: '次数', dataIndex: 'seq', width: 80, render: (v) => `第${v}次` },
               { title: '文件', dataIndex: 'file_name', render: (v, r) => <>{v} <span className="muted small">{fmtSize(r.file_size)}</span></> },
               { title: '结果', width: 120, render: (_, r) => <SubmissionTag status={r.status} verdict={r.verdict} /> },
-              { title: '结果上传状态', width: 165, render: (_, r) => <><ConfirmationTag confirmedAt={r.confirmed_at} status={r.status} />{r.confirmed_at && <div className="muted small">{r.confirmed_at}</div>}</> },
+              { title: '提交状态', width: 165, render: (_, r) => <><ConfirmationTag confirmedAt={r.confirmed_at} status={r.status} withdrawnAt={r.withdrawn_at} />{r.confirmed_at && <div className="muted small">{r.confirmed_at}</div>}</> },
               { title: '文件上传时间', dataIndex: 'created_at', width: 170 },
               {
                 title: '操作',

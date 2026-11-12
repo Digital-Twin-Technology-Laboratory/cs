@@ -117,6 +117,7 @@ export interface SubmissionDetail {
   finished_at: string | null;
   confirmed_at: string | null;
   confirmed_by: string;
+  withdrawn_at: string | null;
   canConfirm: boolean;
   verdict_edited_at: string | null;
   verdict_edited_by: string;
@@ -144,6 +145,7 @@ export interface CourseRow {
   latest_verdict: 'passed' | 'failed' | null;
   latest_at: string | null;
   latest_confirmed_at: string | null;
+  latest_withdrawn_at: string | null;
 }
 
 export interface SubmissionRow {
@@ -158,6 +160,7 @@ export interface SubmissionRow {
   created_at: string;
   finished_at: string | null;
   confirmed_at: string | null;
+  withdrawn_at: string | null;
   course_name: string;
   major: string;
   training_type: string;

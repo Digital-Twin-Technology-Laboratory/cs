@@ -26,7 +26,7 @@ export default function Courses() {
       <div className="page-head">
         <div>
           <h1>我的课程</h1>
-          <div className="sub">每门课程的历次上传与检查结果都会保存。检查完成后，请在结果详情中确认上传。</div>
+          <div className="sub">每门课程的历次上传与检查结果都会保存。检查完成后，请在结果详情中确认提交。</div>
         </div>
         <Space>
           <Input.Search placeholder="搜索课程或专业" allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 220 }} />
@@ -49,7 +49,7 @@ export default function Courses() {
             { title: '学生年级', dataIndex: 'student_grade', width: 90, render: (v) => `${v}级` },
             { title: '对照方案', dataIndex: 'plan_grade', width: 90, render: (v) => `${v}级` },
             { title: '最近检查结果', width: 120, render: (_, r) => <SubmissionTag status={r.latest_status} verdict={r.latest_verdict} /> },
-            { title: '结果上传状态', width: 130, render: (_, r) => <ConfirmationTag confirmedAt={r.latest_confirmed_at} status={r.latest_status} /> },
+            { title: '提交状态', width: 130, render: (_, r) => <ConfirmationTag confirmedAt={r.latest_confirmed_at} status={r.latest_status} withdrawnAt={r.latest_withdrawn_at} /> },
             { title: '检查次数', dataIndex: 'submission_count', width: 90, align: 'center' },
             { title: '最近检查时间', dataIndex: 'latest_at', width: 170 },
             {

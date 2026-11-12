@@ -371,10 +371,20 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   const legacyAmbiguous = seed(aliceId, '交叉课程', cs);
   assert.ok((await admin('/api/supervision-management')).data.requirements.filter((row) => row.course_name === '交叉课程').every((row) => row.latest_id === null), 'An ambiguous legacy upload is not credited to either course group');
   assert.equal((await leader(`/api/submissions/${legacyAmbiguous}`)).status, 404);
-  assert.equal((await upload(admin, '交叉课程', cs)).status, 400);
   const selectedCourse = ambiguous.find((row) => row.course_group === groupA);
-  assert.equal((await upload(admin, '其他课程', cs, selectedCourse.id)).status, 400);
-  assert.equal((await upload(admin, '交叉课程', ai, selectedCourse.id)).status, 400);
+  const adminId = (await admin('/api/auth/me')).data.user.id;
+  assert.equal((await admin(`/api/admin/users/${adminId}/check-quota`, { amount: 5 })).status, 200);
+  for (const [name, major, requirementId] of [
+    ['交叉课程', cs, undefined],
+    ['其他课程', cs, selectedCourse.id],
+    ['交叉课程', ai, selectedCourse.id],
+    ['名单外课程', cs, 999999],
+  ]) {
+    const uploaded = await upload(admin, name, major, requirementId);
+    assert.equal(uploaded.status, 200);
+    await finish(uploaded.data.submissionId);
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(uploaded.data.submissionId).outline_requirement_id, null);
+  }
   const options = (await admin('/api/options')).data.outlineCourses;
   assert.equal(options.length, 8);
   assert.equal(options.filter((course) => course.name === '交叉课程').length, 2);
@@ -448,8 +458,9 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     const options = (await bob('/api/options')).data.outlineCourses.filter((course) => course.name === name);
     assert.deepEqual(options.map((course) => course.writer_name).sort(), ['执笔人乙', '执笔人甲'].sort());
     const ambiguousUpload = await upload(admin, name, cs);
-    assert.equal(ambiguousUpload.status, 400);
-    assert.match(ambiguousUpload.data.error, /多个应交任务/);
+    assert.equal(ambiguousUpload.status, 200);
+    await finish(ambiguousUpload.data.submissionId);
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(ambiguousUpload.data.submissionId).outline_requirement_id, null);
 
     const bobUpload = await upload(bob, name, cs);
     assert.equal(bobUpload.status, 200);
@@ -464,7 +475,7 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     }
   });
 
-  await t.test('manual selection overrides personal matching; multiple personal tasks still require selection', async () => {
+  await t.test('manual selection is optional and ambiguous personal tasks do not block uploads', async () => {
     assert.equal((await admin(`/api/admin/users/${aliceId}/check-quota`, { amount: 2 })).status, 200);
     const tasks = (await admin('/api/supervision-management')).data.requirements;
     const bobTask = tasks.find((row) => row.course_name === '数据库原理与设计' && row.user_id === bobId);
@@ -480,8 +491,9 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal(personalTasks.length, 2);
     for (const task of personalTasks) assert.equal((await assignWriter(admin, task, aliceId)).status, 200);
     const ambiguousUpload = await upload(alice, '交叉课程', cs);
-    assert.equal(ambiguousUpload.status, 400);
-    assert.match(ambiguousUpload.data.error, /课程名称.*下拉列表/);
+    assert.equal(ambiguousUpload.status, 200);
+    await finish(ambiguousUpload.data.submissionId);
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(ambiguousUpload.data.submissionId).outline_requirement_id, null);
   });
 
   await t.test('four upload majors use the selected 2023-2026 plan without a training-type selector', async () => {
@@ -575,5 +587,85 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     for (const suffix of ['', '/file', '/report.txt', '/report.docx']) {
       assert.equal((await bob(`/api/submissions/${outsideSource.data.submissionId}${suffix}`)).status, 404);
     }
+  });
+
+  await t.test('only uploaders can withdraw confirmed results; all progress resets without losing files or reviving older versions', async () => {
+    assert.equal((await configure(admin, 'head', { college_role: 'program', program_scopes: [cs] })).status, 200);
+    const requirementId = Number(database.prepare(`INSERT INTO outline_requirements
+      (source_key, course_name, course_group, professional, writer_user_id) VALUES (?, ?, ?, ?, ?)`)
+      .run('withdrawal-test', '撤回测试课程', groupB, cs, aliceId).lastInsertRowid);
+    const historicalId = seed(aliceId, '撤回测试课程', cs, 'passed', requirementId);
+    assert.equal((await alice(`/api/submissions/${historicalId}/confirm`, {})).status, 200);
+    const id = seed(aliceId, '撤回测试课程', cs, 'passed', requirementId);
+    const url = `/api/submissions/${id}`;
+    assert.equal((await alice(`${url}/withdraw`, {})).status, 409);
+    assert.equal((await alice(`${url}/confirm`, {})).status, 200);
+    const before = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
+    const quota = (await alice('/api/auth/me')).data.checkQuota;
+    const snapshots = [];
+    for (const [request, route] of [
+      [alice, '/api/progress'], [admin, '/api/supervision/progress?view=college'],
+      [otherLeader, '/api/supervision/progress?view=group'], [head, '/api/supervision/progress?view=program'],
+    ]) {
+      const response = await request(route);
+      assert.equal(response.status, 200);
+      snapshots.push({ request, route, summary: route === '/api/progress' ? response.data : response.data.summary });
+    }
+    const adminProgress = (await admin('/api/admin/progress')).data.summary;
+    assert.equal((await client()(`${url}/withdraw`, {})).status, 401);
+    assert.equal((await alice('/api/submissions/999999/withdraw', {})).status, 404);
+    for (const request of [admin, otherLeader, head, dual]) {
+      assert.equal((await request(`${url}/withdraw`, {})).status, 403);
+    }
+    assert.equal((await alice(`${url}/withdraw`, {})).status, 200);
+    assert.equal((await alice(`${url}/withdraw`, {})).status, 409);
+    const after = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
+    assert.equal(after.confirmed_at, null);
+    assert.equal(after.confirmed_by, '');
+    assert.ok(after.withdrawn_at);
+    for (const key of Object.keys(before).filter((key) => !['confirmed_at', 'confirmed_by', 'withdrawn_at'].includes(key))) {
+      assert.deepEqual(after[key], before[key], key);
+    }
+    assert.equal((await alice(url)).data.submission.withdrawn_at, after.withdrawn_at);
+    assert.deepEqual((await alice(`${url}/file`)).data, file);
+    assert.equal((await alice(`${url}/report.docx`)).status, 200);
+    assert.deepEqual((await alice('/api/auth/me')).data.checkQuota, quota);
+    assert.equal((await alice(`/api/courses/${after.course_id}`)).data.submissions[0].withdrawn_at, after.withdrawn_at);
+    assert.equal((await alice('/api/courses')).data.courses.find((row) => row.id === after.course_id).latest_withdrawn_at, after.withdrawn_at);
+    for (const [request, route] of [[alice, '/api/submissions'], [admin, '/api/admin/submissions']]) {
+      const rows = (await request(`${route}?confirmation=withdrawn`)).data.rows;
+      assert.deepEqual(rows.map((row) => row.id), [id]);
+      assert.equal(rows[0].withdrawn_at, after.withdrawn_at);
+      assert.ok((await request(`${route}?confirmation=pending`)).data.rows.some((row) => row.id === id));
+      assert.ok(!(await request(`${route}?confirmation=confirmed`)).data.rows.some((row) => row.id === id));
+    }
+    for (const { request, route, summary } of snapshots) {
+      const data = (await request(route)).data;
+      const current = route === '/api/progress' ? data : data.summary;
+      assert.equal(current.required, summary.required);
+      for (const key of ['uploaded', 'passed', 'confirmed']) assert.equal(current[key], summary[key] - 1, `${route}: ${key}`);
+    }
+    const missing = (await alice('/api/progress')).data.courses.find((row) => row.id === requirementId);
+    assert.equal(missing.latest_id, null);
+    assert.equal(missing.status, null);
+    assert.equal(missing.confirmed_at, null);
+    assert.ok(database.prepare('SELECT confirmed_at FROM submissions WHERE id = ?').get(historicalId).confirmed_at);
+    const withdrawnProgress = (await admin('/api/admin/progress')).data.summary;
+    for (const key of ['uploadedOutlines', 'passedOutlines', 'confirmedOutlines']) assert.equal(withdrawnProgress[key], adminProgress[key] - 1);
+    assert.equal((await otherLeader(`${url}/confirm`, {})).status, 200);
+    const restored = (await alice(url)).data.submission;
+    assert.equal(restored.withdrawn_at, null);
+    assert.match(restored.confirmed_by, /课程组长/);
+    for (const { request, route, summary } of snapshots) {
+      const data = (await request(route)).data;
+      const current = route === '/api/progress' ? data : data.summary;
+      for (const key of ['required', 'uploaded', 'passed', 'confirmed']) assert.equal(current[key], summary[key], `${route}: ${key}`);
+    }
+    assert.equal((await alice(`${url}/withdraw`, {})).status, 200, 'The original uploader may also withdraw a leader-confirmed result');
+    assert.equal((await alice(`${url}/confirm`, {})).status, 200);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = '撤回上传' AND target = ?").get(`记录#${id}`).n, 2);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = '确认提交' AND target = ?").get(`记录#${id}`).n, 2);
+    assert.equal((await alice(`/api/submissions/${historicalId}/withdraw`, {})).status, 200);
+    assert.deepEqual((await admin('/api/admin/progress')).data.summary, adminProgress, 'Withdrawing a historical version must not withdraw the current version');
   });
 });

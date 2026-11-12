@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Empty, Row, Statistic } from 'antd';
+import { Alert, Button, Card, Col, Empty, Row, Space, Statistic } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../api';
@@ -22,13 +22,16 @@ export default function Overview() {
   }, []);
   useEffect(() => {
     load();
-    const timer = setInterval(load, 10000);
+    const timer = setInterval(load, 60 * 60 * 1000);
     return () => clearInterval(timer);
   }, [load]);
   return <div className="page">
     <div className="page-head">
-      <div><h1>个人总览</h1><div className="sub">仅显示云文档清单中指定你为执笔人的应交课程，每 10 秒自动刷新。</div></div>
-      <Link to="/upload"><Button type="primary">上传大纲</Button></Link>
+      <div><h1>个人总览</h1><div className="sub">仅显示云文档清单中指定你为执笔人的应交课程，每 1 小时自动刷新。</div></div>
+      <Space wrap>
+        <Button onClick={load}>刷新</Button>
+        <Link to="/upload"><Button type="primary">上传大纲</Button></Link>
+      </Space>
     </div>
     {error && <Alert type="error" showIcon title={error} action={<Button onClick={load}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Card loading={!data && !error}>

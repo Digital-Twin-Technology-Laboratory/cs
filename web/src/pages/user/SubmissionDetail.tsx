@@ -20,6 +20,7 @@ export default function SubmissionDetail() {
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
 
   const load = useCallback(
     () =>
@@ -51,11 +52,24 @@ export default function SubmissionDetail() {
     try {
       await api.post(`/api/submissions/${s.id}/confirm`);
       await load();
-      message.success('已最终确认，管理员端与个人总览已同步');
+      message.success(isOther ? '已最终确认，管理员端与个人总览已同步' : '已确认提交，管理员端与个人总览已同步');
     } catch (e) {
       message.error((e as Error).message);
     } finally {
       setConfirming(false);
+    }
+  };
+
+  const withdraw = async () => {
+    setWithdrawing(true);
+    try {
+      await api.post(`/api/submissions/${s.id}/withdraw`);
+      await load();
+      message.success('已撤回上传，本条记录恢复为未上传，原文件和检查结果保留');
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setWithdrawing(false);
     }
   };
 
@@ -96,13 +110,16 @@ export default function SubmissionDetail() {
             className="no-print"
             type={s.confirmed_at ? 'success' : 'info'}
             showIcon
-            title={s.confirmed_at ? '检查结果已确认上传' : '检查已完成，结果尚未确认上传'}
-            description={s.confirmed_at ? `确认时间：${s.confirmed_at}${s.confirmed_by ? `；${s.confirmed_by}` : ''}` : s.canConfirm ? '查看结果后可直接最终确认，确认状态同步到管理员与个人总览；组长确认后无需教师再次确认。' : '等待上传者或本课程组长最终确认。'}
-            action={s.canConfirm && !s.confirmed_at && (
-              <Popconfirm title="最终确认本次检查结果？" description="直接保存最终确认状态，不改变检查结论。" okText="最终确认" onConfirm={confirm} okButtonProps={{ loading: confirming }}>
-                <Button type="primary" icon={<CheckOutlined />} loading={confirming}>{isOther ? '组长最终确认' : '确认上传结果'}</Button>
-              </Popconfirm>
-            )}
+            title={s.confirmed_at ? '检查结果已提交' : s.withdrawn_at ? '已撤回上传，当前状态：未上传' : '检查已完成，结果尚未提交'}
+            description={s.confirmed_at ? `确认时间：${s.confirmed_at}${s.confirmed_by ? `；${s.confirmed_by}` : ''}` : s.withdrawn_at ? `撤回时间：${s.withdrawn_at}。原文件和检查结果保留，可再次确认提交；应交进度暂不计入已上传、通过和确认数量。` : s.canConfirm ? '查看结果后可确认提交，状态同步到管理员与个人总览；组长最终确认后无需教师再次确认。' : '等待上传者确认提交或本课程组长最终确认。'}
+            action={<Space>
+              {s.canConfirm && !s.confirmed_at && <Popconfirm title={isOther ? '最终确认本次检查结果？' : '确认提交本次检查结果？'} description="保存提交状态，不改变检查结论。" okText={isOther ? '最终确认' : '确认提交'} onConfirm={confirm} okButtonProps={{ loading: confirming }}>
+                <Button type="primary" icon={<CheckOutlined />} loading={confirming}>{isOther ? '组长最终确认' : '确认提交'}</Button>
+              </Popconfirm>}
+              {!isOther && s.confirmed_at && <Popconfirm title="撤回上传？" description="本条记录恢复为未上传；若为课程最新结果，应交进度同步恢复未上传。原文件和检查结果保留，可再次确认提交。" okText="撤回上传" onConfirm={withdraw} okButtonProps={{ loading: withdrawing }}>
+                <Button danger loading={withdrawing}>撤回上传</Button>
+              </Popconfirm>}
+            </Space>}
           />
         )}
         {s.status === 'queued' && (

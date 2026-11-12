@@ -52,7 +52,7 @@ export function getOutlineRows() {
     LEFT JOIN submissions s ON s.id = (
       SELECT MAX(s2.id) FROM submissions s2 JOIN courses c ON c.id = s2.course_id
       WHERE ${matchesOutline('s2', 'c')}
-    )
+    ) AND s.withdrawn_at IS NULL
     LEFT JOIN users uploader ON uploader.id = s.user_id
     ORDER BY r.course_group, r.professional, r.course_name
   `).all() as OutlineProgressRow[];
