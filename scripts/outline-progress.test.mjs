@@ -309,8 +309,11 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal(managed.requirements.find((r) => r.id === foundation.id).user_id, bobId);
   assert.equal(managed.requirements.find((r) => r.id === unmatched.id).user_id, aliceId);
   assert.equal(managed.requirements.length, 6);
+  const aiRequests = [];
   const mock = http.createServer(async (req, res) => {
-    for await (const _chunk of req) { /* Drain the provider request. */ }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    aiRequests.push(JSON.parse(body));
     const items = database.prepare('SELECT code FROM checklist_items WHERE version_id = ?').all(checklistId);
     const result = { summary: 'Course upload test', itemResults: items.map(({ code }) => ({ code, result: '未发现问题', note: '' })), issues: [], toVerify: [] };
     res.setHeader('Content-Type', 'application/json');
@@ -547,6 +550,46 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     const ordinaryDetail = (await admin(`/api/submissions/${ordinary.data.submissionId}`)).data.submission;
     assert.equal(ordinaryDetail.course.trainingType, '普通本科');
     assert.equal(ordinaryDetail.plan_name, '2024-普通本科');
+  });
+
+  await t.test('a shared course name never replaces the manually selected major or its plan', async () => {
+    assert.equal((await admin(`/api/admin/users/${adminId}/check-quota`, { amount: 2 })).status, 200);
+    const name = '算法设计与分析';
+    const csTaskId = Number(database.prepare(`INSERT INTO outline_requirements
+      (source_key,course_name,course_group,professional,writer_user_id) VALUES (?,?,?,?,?)`)
+      .run('algorithm-cs', name, groupA, cs, adminId).lastInsertRowid);
+    const planText = '物联网工程课程支撑矩阵\n| 课程 | 2.2 | 4.2 | 4.4 |\n| 算法设计与分析 | H | M | M |';
+    const planId = Number(database.prepare(`INSERT INTO training_plans (major,training_type,grade,name,extracted_text)
+      VALUES (?,'普通本科',2025,?,?)`).run(iot, '2025物联网工程培养方案', planText).lastInsertRowid);
+    const form = new FormData();
+    for (const [key, value] of Object.entries({ name, major: iot, studentGrade: 2024, planGrade: 2025, outlineRequirementId: csTaskId })) {
+      form.append(key, String(value));
+    }
+    form.append('file', new Blob([syllabus]), '2026-2027-1算法设计与分析_24物联网教学大纲.docx');
+    const uploaded = await admin('/api/submissions', form);
+    assert.equal(uploaded.status, 200);
+    await finish(uploaded.data.submissionId);
+    const detail = (await admin(`/api/submissions/${uploaded.data.submissionId}`)).data.submission;
+    assert.equal(detail.course.name, name);
+    assert.equal(detail.course.major, iot);
+    assert.equal(detail.course.studentGrade, 2024);
+    assert.equal(detail.plan_id, planId);
+    assert.equal(detail.plan_name, '2025物联网工程培养方案');
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(detail.id).outline_requirement_id, null);
+    const prompt = aiRequests.at(-1).messages.find((message) => message.role === 'user').content;
+    assert.ok(prompt.includes(`- 专业：${iot}`));
+    assert.ok(prompt.includes(planText));
+    assert.ok(!prompt.includes('<training_plan>\nTraining plan test fixture'));
+    assert.ok(prompt.includes('不根据同名课程、课程清单中的审核专业或文件名切换专业与方案'));
+    assert.ok(prompt.includes('相关比对列入 toVerify，不能猜测支撑点或据此写入 issues'));
+
+    const iotTaskId = Number(database.prepare(`INSERT INTO outline_requirements
+      (source_key,course_name,course_group,professional,writer_user_id) VALUES (?,?,?,?,?)`)
+      .run('algorithm-iot', name, groupA, iot, adminId).lastInsertRowid);
+    const matched = await upload(admin, name, iot);
+    assert.equal(matched.status, 200);
+    await finish(matched.data.submissionId);
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(matched.data.submissionId).outline_requirement_id, iotTaskId);
   });
 
   await t.test('teaching staff can read all results, including uploads outside the cloud course list', async () => {

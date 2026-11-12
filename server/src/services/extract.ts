@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import mammoth from 'mammoth';
 import { parse, HTMLElement, Node, NodeType } from 'node-html-parser';
-import { extractText, getDocumentProxy } from 'unpdf';
+import { extractTextItems, getDocumentProxy } from 'unpdf';
+import { pdfPageToStructuredText } from './pdfText.js';
 
 export class ExtractError extends Error {}
 
@@ -115,8 +116,8 @@ export async function extractFile(filePath: string, originalName: string): Promi
     try {
       const buf = await fs.readFile(filePath);
       const pdf = await getDocumentProxy(new Uint8Array(buf));
-      const { text: pages } = await extractText(pdf, { mergePages: false });
-      text = (pages as string[]).map((p, i) => `【第${i + 1}页】\n${p.trim()}`).join('\n\n');
+      const { items: pages } = await extractTextItems(pdf);
+      text = pages.map((items, i) => `【第${i + 1}页】\n${pdfPageToStructuredText(items).trim()}`).join('\n\n');
     } catch {
       throw new ExtractError('无法读取该 PDF 文件');
     }

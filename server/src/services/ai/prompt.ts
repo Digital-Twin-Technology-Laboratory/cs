@@ -87,6 +87,11 @@ export function buildUserPrompt(p: PromptInput): string {
     `\n# 课程信息\n- 课程名称：${c.name}\n- 专业：${c.major}\n- 培养类型：${c.trainingType}\n- 学生年级：${c.studentGrade}级\n- 对照方案：${c.planGrade}级${c.major}（${c.trainingType}）人才培养方案` +
       (c.adjustNote ? `\n- 对照方案调整说明：${c.adjustNote}` : ''),
   );
+  parts.push(`\n# 专业与毕业要求比对边界
+- 以本次课程信息中用户选择的专业、培养类型和对照方案年级为准；不根据同名课程、课程清单中的审核专业或文件名切换专业与方案。
+- 区分毕业要求指标正文、课程设置与毕业要求的支撑矩阵、毕业要求与培养目标的关系表。只用本课程在课程支撑矩阵中的行核对支撑点；不能用培养目标关系表代替。
+- 判定课程目标与毕业要求关系存在问题时，必须同时给出大纲实际写法和所选培养方案对应指标或本课程矩阵单元格的原文依据，说明具体差异。已与方案一致的对应关系不得判错；不机械要求课程目标与指标一一对应。
+- PDF 提取后的连续 H/M/L 不代表连续指标列，空白列可能未显示。优先使用按页面坐标还原的矩阵；若表头、课程行、指标编号或列对应关系无法可靠辨认，相关比对列入 toVerify，不能猜测支撑点或据此写入 issues。`);
 
   if (p.plan) {
     parts.push(`\n# 对照培养方案：${p.plan.name}\n<training_plan>\n${p.plan.text}\n</training_plan>`);
