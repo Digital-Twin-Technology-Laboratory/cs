@@ -93,14 +93,12 @@ authRouter.post('/login', (req, res) => {
   if (u.status === 'disabled') return res.status(403).json({ error: '账号已被停用，请联系管理员' });
 
   if (!u.password_hash) {
-    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(bcrypt.hashSync(INITIAL_PASSWORD, 10), u.id);
-  } else if (u.roster_login === 1 && password === INITIAL_PASSWORD) {
-    db.prepare('UPDATE users SET must_change_password = 1 WHERE id = ?').run(u.id);
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(INITIAL_PASSWORD, 10), u.id);
   }
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: '登录失败' });
     req.session.userId = u.id;
-    db.prepare("UPDATE users SET last_login_at = datetime('now','localtime') WHERE id = ?").run(u.id);
+    db.prepare("UPDATE users SET last_login_at = datetime('now','localtime'), must_change_password = 0 WHERE id = ?").run(u.id);
     audit(u, '登录', undefined, undefined, req.ip);
     res.json({ user: toPublic(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id) as UserRow) });
   });

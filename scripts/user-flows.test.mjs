@@ -128,13 +128,13 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await admin(`/api/admin/users/${duplicate.data.id}`, undefined, 'DELETE')).status, 200);
   });
 
-  await t.test('initial passwords require a change; password login accepts ID and unique name', async () => {
+  await t.test('initial passwords allow direct access; password login accepts ID and unique name', async () => {
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001' })).status, 400);
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001', name: 'Wrong Name' })).status, 400);
     const first = await teacher('/api/auth/login', { username: 'teacher001', password: '12345678' });
     assert.equal(first.status, 200);
-    assert.equal(first.data.user.must_change_password, 1);
-    assert.equal((await teacher('/api/options')).status, 403);
+    assert.equal(first.data.user.must_change_password, 0);
+    assert.equal((await teacher('/api/options')).status, 200);
     assert.equal((await teacher('/api/auth/password', { oldPassword: '12345678', newPassword: 'changed12345' }, 'PUT')).status, 200);
     assert.equal((await teacher('/api/auth/login', { username: 'teacher001', name: '测试教师' })).status, 400);
     await teacher('/api/auth/logout', {});
@@ -153,7 +153,7 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await resetUser('/api/auth/login', { username: 'teacher005', name: '重置教师' })).status, 400);
     const resetLogin = await resetUser('/api/auth/login', { username: 'teacher005', password: 'reset12345' });
     assert.equal(resetLogin.status, 200);
-    assert.equal(resetLogin.data.user.must_change_password, 1);
+    assert.equal(resetLogin.data.user.must_change_password, 0);
     assert.equal((await resetUser('/api/auth/password', { oldPassword: 'reset12345', newPassword: 'reset-changed12345' }, 'PUT')).status, 200);
   });
 

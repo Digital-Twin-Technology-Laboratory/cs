@@ -169,7 +169,7 @@ export interface Options {
   outlineCourses: { id: number; name: string; professional: string; course_group: string; writer_name: string; writer_identifier: string }[];
   majors: string[];
   studentGrades: number[];
-  plans: { major: string; training_type: string; grade: number; name: string }[];
+  plans: { id: number; major: string; training_type: string; grade: number; name: string; downloadable: number }[];
   trainingTypes: string[];
   maxUploadMB: number;
   aiReady: boolean;

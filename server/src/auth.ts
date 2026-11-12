@@ -95,15 +95,11 @@ export function loadUser(req: Request, _res: Response, next: NextFunction) {
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: '请先登录' });
-  if (req.user.must_change_password && !(req.method === 'PUT' && req.originalUrl.split('?')[0] === '/api/auth/password')) {
-    return res.status(403).json({ error: '请先修改初始密码后再使用系统' });
-  }
   next();
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: '请先登录' });
-  if (req.user.must_change_password) return res.status(403).json({ error: '请先修改初始密码后再使用系统' });
   if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
   next();
 }

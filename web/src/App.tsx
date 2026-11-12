@@ -5,7 +5,6 @@ import { NumberOverridesProvider } from './components/EditableNumber';
 import AppLayout from './layouts/AppLayout';
 import AdminLayout from './layouts/AdminLayout';
 import Login from './pages/Login';
-import ChangePassword from './pages/ChangePassword';
 import Register from './pages/Register';
 import Upload from './pages/user/Upload';
 import Courses from './pages/user/Courses';
@@ -30,7 +29,6 @@ function RequireAuth({ children, admin }: { children: React.ReactNode; admin?: b
   const { user } = useAuth();
   const loc = useLocation();
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />;
-  if (user.must_change_password) return <Navigate to="/change-password" replace />;
   if (admin && user.role !== 'admin') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
@@ -46,7 +44,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/change-password" element={!user ? <Navigate to="/login" replace /> : user.must_change_password ? <ChangePassword /> : <Navigate to="/" replace />} />
+      <Route path="/change-password" element={<Navigate to={user ? '/profile' : '/login'} replace />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <Register />} />
       <Route
         element={

@@ -1,4 +1,4 @@
-import { Alert, App, AutoComplete, Button, Card, Form, Input, Select, Space, Tag, Upload as AntUpload } from 'antd';
+import { Alert, App, AutoComplete, Button, Card, Dropdown, Form, Input, Select, Space, Tag, Upload as AntUpload } from 'antd';
 import Table from '../../components/ResponsiveTable';
 import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
@@ -28,6 +28,7 @@ export default function Upload() {
   const [submitting, setSubmitting] = useState(false);
   const [activeUid, setActiveUid] = useState<string | null>(null);
   const pendingCount = files.filter((file) => !results[file.uid]?.submissionId).length;
+  const downloadablePlans = (options?.plans ?? []).filter((plan) => plan.grade === 2025 && plan.downloadable);
 
   useEffect(() => {
     api.get<Options>('/api/options').then(setOptions).catch((e) => message.error(e.message));
@@ -95,10 +96,20 @@ export default function Upload() {
           initialValues={{ planGrade: 2025 }}
           onFinish={submit}
         >
-          <Form.Item label="人才培养方案年级（应用于待上传大纲）" name="planGrade" rules={[{ required: true, message: '请选择人才培养方案年级' }]}
-            extra="默认使用2025级人才培养方案，与下方学生年级分开选择。" style={{ maxWidth: 480 }}>
-            <Select aria-label="人才培养方案年级" options={(options?.studentGrades ?? []).map((year) => ({ value: year, label: `${year}级` }))} />
-          </Form.Item>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 16 }}>
+            <Form.Item label="人才培养方案年级（应用于待上传大纲）" name="planGrade" rules={[{ required: true, message: '请选择人才培养方案年级' }]}
+              extra="默认使用2025级人才培养方案，与下方学生年级分开选择。" style={{ width: '100%', maxWidth: 480 }}>
+              <Select aria-label="人才培养方案年级" options={(options?.studentGrades ?? []).map((year) => ({ value: year, label: `${year}级` }))} />
+            </Form.Item>
+            <Dropdown trigger={['click']} disabled={!downloadablePlans.length} menu={{
+              items: downloadablePlans.map((plan) => ({ key: plan.id, label: <a href={`/api/plans/${plan.id}/file`}>{plan.name}</a> })),
+            }}>
+              <Button icon={<DownloadOutlined />} disabled={!downloadablePlans.length} style={{ marginBottom: 24 }}
+                title={!downloadablePlans.length ? '管理员尚未上传可下载的2025级人才培养方案' : '选择专业对应的培养方案'}>
+                下载25级人才培养方案
+              </Button>
+            </Dropdown>
+          </div>
           <Form.Item label="教学大纲文件" required extra={`支持 .docx、.pdf，单个文件不超过 ${options?.maxUploadMB ?? 20}MB。每次上传独立检查，不与以往记录对比。`}>
             <AntUpload.Dragger
               accept=".docx,.pdf"

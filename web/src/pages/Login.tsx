@@ -38,7 +38,7 @@ export default function Login() {
     }
   };
 
-  if (user) return <Navigate to={user.must_change_password ? '/change-password' : redirectTo} replace />;
+  if (user) return <Navigate to={redirectTo} replace />;
   const canRegister = !site?.hasUsers || site.registrationMode !== 'closed';
 
   return (
@@ -58,7 +58,7 @@ export default function Login() {
             </Button>
           </Form>
           <div className="muted small" style={{ marginTop: 12 }}>
-            使用工号或姓名加密码登录；同名请使用工号。初始密码由管理员提供，首次登录后须修改密码。忘记密码请联系管理员。
+            使用工号或姓名加密码登录，初始密码为 12345678。忘记密码请联系管理员。
           </div>
           <div style={{ textAlign: 'center', marginTop: 16 }} className="muted small">
             {canRegister ? (

@@ -83,8 +83,8 @@ userRouter.get('/checklist.docx', async (_req, res) => {
 
 userRouter.get('/options', (req, res) => {
   const plans = db
-    .prepare('SELECT major, training_type, grade, name FROM training_plans WHERE enabled = 1 ORDER BY major, training_type, grade')
-    .all() as { major: string; training_type: string; grade: number; name: string }[];
+    .prepare("SELECT id, major, training_type, grade, name, file_path IS NOT NULL AND file_path != '' AS downloadable FROM training_plans WHERE enabled = 1 ORDER BY major, training_type, grade")
+    .all() as { id: number; major: string; training_type: string; grade: number; name: string; downloadable: number }[];
   const site = getSettings('site');
   const checklist = loadChecklist();
   res.json({
@@ -98,6 +98,15 @@ userRouter.get('/options', (req, res) => {
     requiredCourses: db.prepare('SELECT DISTINCT course_name AS name, professional FROM outline_requirements WHERE writer_user_id = ? ORDER BY course_name').all(req.user!.id),
     outlineCourses: db.prepare('SELECT id, course_name AS name, professional, course_group, writer_name, writer_identifier FROM outline_requirements ORDER BY course_group, professional, course_name, writer_name').all(),
   });
+});
+
+userRouter.get('/plans/:id/file', (req, res) => {
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const plan = db.prepare('SELECT file_path, file_name FROM training_plans WHERE id = ? AND enabled = 1').get(id) as
+    | { file_path: string | null; file_name: string }
+    | undefined;
+  if (!plan?.file_path) return res.status(404).json({ error: '培养方案文件不存在或未启用' });
+  sendStored(res, plan.file_path, plan.file_name);
 });
 
 userRouter.get('/plan-match', (req, res) => {

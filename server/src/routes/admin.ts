@@ -180,7 +180,7 @@ adminRouter.post('/users', (req, res) => {
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(body.username)) return res.status(400).json({ error: '该用户名已存在' });
   const r = db.transaction(() => {
     const created = db
-      .prepare("INSERT INTO users (username, password_hash, name, department, role, status, must_change_password) VALUES (?, ?, ?, ?, ?, 'active', 1)")
+      .prepare("INSERT INTO users (username, password_hash, name, department, role, status) VALUES (?, ?, ?, ?, ?, 'active')")
       .run(body.username, bcrypt.hashSync(body.password, 10), body.name, body.department, body.role);
     applyDefaultProfessionalView(created.lastInsertRowid, body.name);
     applyDefaultGroupView(created.lastInsertRowid, body.name);
@@ -197,7 +197,7 @@ adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, r
     const { entries } = await readRoster(file);
     const imported = db.transaction(() => {
       const insert = db.prepare(
-        "INSERT INTO users (username, password_hash, name, role, status, roster_login, must_change_password) VALUES (?, '', ?, 'user', 'active', 1, 1) ON CONFLICT(username) DO NOTHING",
+        "INSERT INTO users (username, password_hash, name, role, status, roster_login) VALUES (?, '', ?, 'user', 'active', 1) ON CONFLICT(username) DO NOTHING",
       );
       const added: { id: number; name: string }[] = [];
       for (const entry of entries) {
@@ -276,7 +276,7 @@ adminRouter.post('/users/:id/reset-password', (req, res) => {
   const { password } = z.object({ password: passwordSchema }).parse(req.body);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
   if (!u) return res.status(404).json({ error: '用户不存在' });
-  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(bcrypt.hashSync(password, 10), id);
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(bcrypt.hashSync(password, 10), id);
   audit(req.user, '重置密码', u.username, undefined, req.ip);
   res.json({ ok: true });
 });
