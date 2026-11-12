@@ -2,9 +2,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -40,10 +41,12 @@ test('plan identification, manual override and matching downloads', async (t) =>
     cwd: root, env: { ...process.env, DATA_DIR: dataDir, HOST: '127.0.0.1', PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
+  let database;
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
   t.after(async () => {
     if (child.exitCode === null) { child.kill(); await once(child, 'exit'); }
+    database?.close();
     assert.equal(path.dirname(dataDir), root);
     assert.match(path.basename(dataDir), /^\.tmp-plan-matching-/);
     rmSync(dataDir, { recursive: true, force: true });
@@ -53,6 +56,8 @@ test('plan identification, manual override and matching downloads', async (t) =>
     assert.ok(i < 100, output);
     await delay(50);
   }
+  database = new DatabaseSync(path.join(dataDir, 'app.db'));
+  database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   function client() {
     let cookie = '';
     return async (url, body, method = body === undefined ? 'GET' : 'POST') => {
@@ -104,4 +109,74 @@ test('plan identification, manual override and matching downloads', async (t) =>
   query.set('major', row.major);
   assert.equal((await admin(`/api/plan-match?${query}`)).data.plan, null);
   assert.equal((await admin(`/api/plans/${row.id}/file`)).status, 404);
+
+  await t.test('only admins can reextract an existing source; metadata, file and historical results stay unchanged', async () => {
+    const endpoint = `/api/admin/plans/${row.id}/reextract`;
+    assert.equal((await client()(endpoint, {})).status, 401);
+    assert.equal((await admin('/api/admin/users', { username: 'plan-teacher', name: 'Teacher', password: 'teacher12345' })).status, 200);
+    const teacher = client();
+    assert.equal((await teacher('/api/auth/login', { username: 'plan-teacher', password: 'teacher12345' })).status, 200);
+    assert.equal((await teacher(endpoint, {})).status, 403);
+    assert.equal((await admin('/api/admin/plans/999999/reextract', {})).status, 404);
+
+    const manualText = '人工修订后的方案文本。'.repeat(10);
+    assert.equal((await admin(`/api/admin/plans/${row.id}`, {
+      major: row.major, trainingType: row.training_type, grade: row.grade, name: '手工命名的停用方案', extractedText: manualText, enabled: false,
+    }, 'PUT')).status, 200);
+    database.prepare("UPDATE training_plans SET updated_at = '2000-01-01 00:00:00' WHERE id = ?").run(row.id);
+    const before = (await admin(`/api/admin/plans/${row.id}`)).data.plan;
+    const originalBytes = readFileSync(path.join(dataDir, before.file_path));
+    const adminId = database.prepare("SELECT id FROM users WHERE username = 'root-plan'").get().id;
+    const courseId = Number(database.prepare(`INSERT INTO courses (user_id,name,major,training_type,student_grade)
+      VALUES (?,'历史课程',?,'专转本',2024)`).run(adminId, row.major).lastInsertRowid);
+    const submissionId = Number(database.prepare(`INSERT INTO submissions
+      (course_id,user_id,seq,file_name,file_path,file_size,plan_id,status,verdict,result_json)
+      VALUES (?,?,1,'historical.docx','uploads/historical.docx',100,?,'done','failed','{"summary":"历史结果"}')`)
+      .run(courseId, adminId, row.id).lastInsertRowid);
+    const historical = database.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId);
+    assert.equal((await admin(endpoint, {})).status, 200);
+    const after = (await admin(`/api/admin/plans/${row.id}`)).data.plan;
+    assert.equal(after.extracted_text, text, 'Reextract uses the stored source, not manually edited text');
+    assert.notEqual(after.updated_at, before.updated_at);
+    for (const field of ['id', 'name', 'major', 'training_type', 'grade', 'enabled', 'file_name', 'file_path', 'created_at']) {
+      assert.equal(after[field], before[field], field);
+    }
+    assert.deepEqual(readFileSync(path.join(dataDir, after.file_path)), originalBytes);
+    assert.deepEqual(database.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId), historical);
+    assert.equal((await admin('/api/admin/plans')).data.rows.length, 1, 'No duplicate plan is created');
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = '重新提取培养方案'").get().count, 1);
+  });
+
+  await t.test('missing or invalid source files never overwrite the existing text', async () => {
+    writeFileSync(path.join(dataDir, 'plans', 'invalid.docx'), 'Not a Word document');
+    for (const [filePath, fileName, status] of [
+      [null, null, 400],
+      ['plans/missing.txt', 'missing.txt', 404],
+      ['plans/invalid.docx', 'invalid.docx', 400],
+    ]) {
+      database.prepare('UPDATE training_plans SET file_path = ?, file_name = ?, extracted_text = ? WHERE id = ?')
+        .run(filePath, fileName, '必须保留的人工修订', row.id);
+      const before = (await admin(`/api/admin/plans/${row.id}`)).data.plan;
+      const result = await admin(`/api/admin/plans/${row.id}/reextract`, {});
+      assert.equal(result.status, status);
+      assert.ok(result.data.error);
+      assert.deepEqual((await admin(`/api/admin/plans/${row.id}`)).data.plan, before);
+    }
+  });
+
+  await t.test('reextracting the supplied PDF repairs an already saved flattened matrix', { skip: !process.env.PDF_FIXTURE_PATH }, async () => {
+    const file = new FormData();
+    file.append('major', '物联网工程');
+    file.append('trainingType', '普通本科');
+    file.append('grade', '2025');
+    file.append('file', new Blob([readFileSync(process.env.PDF_FIXTURE_PATH)]), '物联网工程培养方案.pdf');
+    const uploaded = await admin('/api/admin/plans', file);
+    assert.equal(uploaded.status, 200);
+    database.prepare('UPDATE training_plans SET extracted_text = ? WHERE id = ?')
+      .run('算法设计与分析 H M M', uploaded.data.id);
+    assert.equal((await admin(`/api/admin/plans/${uploaded.data.id}/reextract`, {})).status, 200);
+    const repaired = (await admin(`/api/admin/plans/${uploaded.data.id}`)).data.plan;
+    assert.match(repaired.extracted_text, /算法设计与分析 2\.2=H 4\.2=M 4\.4=M/);
+    assert.equal(repaired.major, '物联网工程');
+  });
 });

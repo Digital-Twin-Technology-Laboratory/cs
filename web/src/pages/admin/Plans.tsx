@@ -39,6 +39,7 @@ export default function Plans() {
   const [identifyError, setIdentifyError] = useState('');
   const identifyRequest = useRef(0);
   const [editing, setEditing] = useState<number | null>(null);
+  const [reextracting, setReextracting] = useState<number | null>(null);
   const [addForm] = Form.useForm();
   const [editForm] = Form.useForm();
 
@@ -119,6 +120,19 @@ export default function Plans() {
     }
   };
 
+  const reextract = async (id: number) => {
+    setReextracting(id);
+    try {
+      await api.post(`/api/admin/plans/${id}/reextract`);
+      await load();
+      message.success('已从原文件重新提取并保存方案文本，已有检查结果未变更');
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setReextracting(null);
+    }
+  };
+
   const typeOptions = types.map((t) => ({ value: t, label: t }));
   const textLen = Form.useWatch('extractedText', editForm)?.length ?? 0;
 
@@ -148,16 +162,29 @@ export default function Plans() {
             { title: '状态', dataIndex: 'enabled', width: 80, render: (v) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>) },
             {
               title: '操作',
-              width: 220,
+              width: 300,
               render: (_, r) => (
                 <Space size={0}>
-                  <Button type="link" size="small" onClick={() => openEdit(r.id)}>
+                  <Button type="link" size="small" disabled={reextracting === r.id} onClick={() => openEdit(r.id)}>
                     查看 / 修订
                   </Button>
                   {r.file_name && (
-                    <Button type="link" size="small" onClick={() => download(`/api/admin/plans/${r.id}/file`)}>
-                      原文件
-                    </Button>
+                    <>
+                      <Button type="link" size="small" onClick={() => download(`/api/admin/plans/${r.id}/file`)}>
+                        原文件
+                      </Button>
+                      <Popconfirm
+                        title="从原文件重新提取方案文本？"
+                        description="将覆盖已保存的文本（含人工修订）。原文件、方案信息及已有检查结果保持不变。"
+                        okText="确认覆盖并重新提取"
+                        cancelText="取消"
+                        onConfirm={() => reextract(r.id)}
+                      >
+                        <Button type="link" size="small" loading={reextracting === r.id} disabled={reextracting !== null}>
+                          重新提取
+                        </Button>
+                      </Popconfirm>
+                    </>
                   )}
                   <Popconfirm
                     title="删除该培养方案？"
@@ -169,7 +196,7 @@ export default function Plans() {
                         .catch((e) => message.error(e.message))
                     }
                   >
-                    <Button type="link" size="small" danger>
+                    <Button type="link" size="small" danger disabled={reextracting === r.id}>
                       删除
                     </Button>
                   </Popconfirm>

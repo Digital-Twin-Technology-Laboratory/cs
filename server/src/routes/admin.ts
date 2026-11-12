@@ -15,7 +15,7 @@ import { aiReady, listModels, testConnection } from '../services/ai/provider.js'
 import { loadChecklist } from '../services/checklist.js';
 import { aiStructureChecklist, parseChecklistFile } from '../services/checklistImport.js';
 import { extractFile, ExtractError } from '../services/extract.js';
-import { cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
+import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { kickQueue } from '../services/checkQueue.js';
 import { getCheckQuota } from '../services/checkQuota.js';
 import { readRoster, RosterImportError } from '../services/rosterImport.js';
@@ -619,6 +619,27 @@ adminRouter.put('/plans/:id', (req, res) => {
   ).run(body.major, body.trainingType, body.grade, body.name || p.name, body.extractedText, body.enabled, id);
   audit(req.user, '修改培养方案', body.name || p.name, undefined, req.ip);
   res.json({ ok: true });
+});
+
+adminRouter.post('/plans/:id/reextract', async (req, res) => {
+  const id = idParam(req.params.id);
+  const plan = db.prepare('SELECT name, file_path, file_name FROM training_plans WHERE id = ?').get(id) as
+    | { name: string; file_path: string | null; file_name: string | null }
+    | undefined;
+  if (!plan) return res.status(404).json({ error: '培养方案不存在' });
+  if (!plan.file_path || !plan.file_name) return res.status(400).json({ error: '未保存方案原文件，无法重新提取，请重新上传培养方案' });
+  try {
+    const filePath = absPath(plan.file_path);
+    await fs.access(filePath);
+    const text = await extractFile(filePath, plan.file_name);
+    db.prepare("UPDATE training_plans SET extracted_text = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(text, id);
+    audit(req.user, '重新提取培养方案', plan.name, '覆盖方案文本，原文件及已有检查结果不变', req.ip);
+    res.json({ ok: true });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return res.status(404).json({ error: '方案原文件不存在或已被删除，请重新上传培养方案' });
+    if (e instanceof ExtractError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
 });
 
 adminRouter.get('/plans/:id/file', (req, res) => {
