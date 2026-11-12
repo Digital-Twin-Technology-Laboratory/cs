@@ -1,4 +1,7 @@
 import { Router, type Request, type Response } from 'express';
+import fs from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import JSZip from 'jszip';
 import { z } from 'zod';
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
 import { audit, db } from '../db.js';
@@ -6,14 +9,15 @@ import { requireAuth } from '../auth.js';
 import { getSettings } from '../settings.js';
 import { activeChecklistId, loadChecklist } from '../services/checklist.js';
 import { extractFile, ExtractError, SUPPORTED_DOC_EXT } from '../services/extract.js';
-import { cleanupTmp, sendStored, singleUpload, storeFile } from '../services/upload.js';
+import { absPath, cleanupTmp, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { findPlan, kickQueue, type CourseSnapshot } from '../services/checkQueue.js';
 import { aiReady } from '../services/ai/provider.js';
 import { reportDocx, reportText, type ReportInput } from '../services/report.js';
 import { SECTION_META } from '../seed/checklist.js';
 import type { CheckResult } from '../services/ai/schema.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
-import { getOutlineRows, groupOutlinePeople, supervisesOutlineSubmission } from '../services/outlineProgress.js';
+import { getOutlineRows, groupOutlinePeople, matchesOutline, supervisesOutlineSubmission } from '../services/outlineProgress.js';
+import { PLAN_MAJORS as majors } from '../services/planIdentification.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
@@ -30,7 +34,6 @@ userRouter.get('/progress', (req, res) => {
   });
 });
 
-const majors = ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能'] as const;
 const legacyMajors = ['中外物联网', '物联网工程（合作办学）', '智能无人机系统与应用（微专业）', '计算机公共教学', '专转本'] as const;
 const studentGrades = [2023, 2024, 2025, 2026];
 export const courseSchema = z.object({
@@ -114,7 +117,7 @@ userRouter.get('/plan-match', (req, res) => {
     .object({ major: z.string(), trainingType: z.string(), grade: z.coerce.number() })
     .parse(req.query);
   const p = findPlan(major, trainingType, grade);
-  res.json({ plan: p ? { id: p.id, name: p.name } : null });
+  res.json({ plan: p ? { id: p.id, name: p.name, downloadable: !!p.downloadable } : null });
 });
 
 // ---------- 课程 ----------
@@ -178,17 +181,19 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
     const body = courseSchema.extend({ outlineRequirementId: z.coerce.number().int().positive().optional() }).parse(req.body);
     if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
 
-    const requirements = db.prepare(`SELECT id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
+    const requirements = db.prepare(`SELECT id, writer_user_id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
       AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
         OR (? = '计算机科学与技术（专转本）' AND professional = '专转本'))`)
-      .all(body.name, body.major, body.major, body.major) as { id: number }[];
+      .all(body.name, body.major, body.major, body.major) as { id: number; writer_user_id: number | null }[];
     if (body.outlineRequirementId !== undefined && !requirements.some((r) => r.id === body.outlineRequirementId)) {
-      return res.status(400).json({ error: '所选应交课程与课程名称、审核专业不一致，请重新选择清单课程' });
+      return res.status(400).json({ error: '所选应交课程与课程名称、审核专业不一致，请在“课程名称”输入框的下拉列表中重新选择' });
     }
-    if (body.outlineRequirementId === undefined && requirements.length > 1) {
-      return res.status(400).json({ error: '同名课程存在多个应交任务，请从云清单下拉中选择具体课程及执笔人' });
+    const ownRequirements = requirements.filter((r) => r.writer_user_id === req.user!.id);
+    const matchingRequirements = ownRequirements.length ? ownRequirements : requirements;
+    if (body.outlineRequirementId === undefined && matchingRequirements.length > 1) {
+      return res.status(400).json({ error: '同名课程存在多个应交任务，请点击“课程名称”输入框，从下拉列表中选择具体课程组及执笔人' });
     }
-    const requirementId = body.outlineRequirementId ?? requirements[0]?.id ?? null;
+    const requirementId = body.outlineRequirementId ?? matchingRequirements[0]?.id ?? null;
 
     let text: string;
     try {
@@ -245,8 +250,8 @@ type SubFull = {
   verdict_edited_by: string;
 };
 
-function getOwnSub(req: Request, res: Response): SubFull | null {
-  const s = db.prepare('SELECT * FROM submissions WHERE id = ?').get(Number(req.params.id)) as SubFull | undefined;
+function getOwnSub(req: Request, res: Response, id = Number(req.params.id)): SubFull | null {
+  const s = db.prepare('SELECT * FROM submissions WHERE id = ?').get(id) as SubFull | undefined;
   if (!s || (s.user_id !== req.user!.id && req.user!.role !== 'admin' && req.user!.college_role !== 'teaching' && !supervisesOutlineSubmission(req.user!, s.id))) {
     res.status(404).json({ error: '记录不存在' });
     return null;
@@ -255,13 +260,19 @@ function getOwnSub(req: Request, res: Response): SubFull | null {
 }
 
 userRouter.get('/submissions', (req, res) => {
-  const { page, pageSize, q, status, confirmation, scope } = z.object({
+  const { page, pageSize, q, status, confirmation, scope, major, studentGrade, verdict, courseGroup, from, to } = z.object({
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(200).default(20),
     q: z.string().trim().max(200).default(''),
     status: z.enum(['queued', 'running', 'done', 'failed']).optional(),
     confirmation: z.enum(['pending', 'confirmed']).optional(),
     scope: z.enum(['mine', 'college']).default('mine'),
+    major: z.string().trim().max(100).optional(),
+    studentGrade: z.coerce.number().int().optional(),
+    verdict: z.enum(['passed', 'failed']).optional(),
+    courseGroup: z.string().trim().max(100).optional(),
+    from: z.iso.date().optional(),
+    to: z.iso.date().optional(),
   }).parse(req.query);
   if (scope === 'college' && req.user!.role !== 'admin' && req.user!.college_role !== 'teaching') {
     return res.status(403).json({ error: '需要教学条线或管理员权限才能查看全院检查记录' });
@@ -273,6 +284,15 @@ userRouter.get('/submissions', (req, res) => {
     args.push(...Array(5).fill(`%${q}%`));
   }
   if (status) where.push('s.status = ?'), args.push(status);
+  if (major) where.push("json_extract(s.course_snapshot, '$.major') = ?"), args.push(major);
+  if (studentGrade) where.push("json_extract(s.course_snapshot, '$.studentGrade') = ?"), args.push(studentGrade);
+  if (verdict) where.push('s.verdict = ?'), args.push(verdict);
+  if (courseGroup) {
+    where.push(`EXISTS (SELECT 1 FROM outline_requirements r JOIN courses c ON c.id = s.course_id WHERE ${matchesOutline('s', 'c')} AND r.course_group = ?)`);
+    args.push(courseGroup);
+  }
+  if (from) where.push('date(s.created_at) >= ?'), args.push(from);
+  if (to) where.push('date(s.created_at) <= ?'), args.push(to);
   if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
   if (confirmation === 'confirmed') where.push('s.confirmed_at IS NOT NULL');
   const w = where.join(' AND ');
@@ -287,6 +307,39 @@ userRouter.get('/submissions', (req, res) => {
      FROM submissions s JOIN users u ON u.id = s.user_id WHERE ${w} ORDER BY s.id DESC LIMIT ? OFFSET ?`,
   ).all(...args, pageSize, (page - 1) * pageSize);
   res.json({ total, rows });
+});
+
+userRouter.post('/submissions/batch-download', async (req, res) => {
+  const { ids, kind } = z.object({
+    ids: z.array(z.number().int().positive()).min(1).max(100, '每次最多下载100条记录'),
+    kind: z.enum(['files', 'reports']),
+  }).parse(req.body);
+  const submissions: SubFull[] = [];
+  for (const id of new Set(ids)) {
+    const s = getOwnSub(req, res, id);
+    if (!s) return;
+    submissions.push(s);
+  }
+  if (kind === 'reports' && submissions.some((s) => !reportInput(s))) {
+    return res.status(400).json({ error: '所选记录中有尚未完成的检查，请仅选择已完成记录下载检查结果' });
+  }
+  if (kind === 'files' && submissions.some((s) => !fs.existsSync(absPath(s.file_path)))) {
+    return res.status(404).json({ error: '所选原文件不存在或已被删除' });
+  }
+  const zip = new JSZip();
+  for (const s of submissions) {
+    const name = (kind === 'files' ? s.file_name : reportName(s, 'docx')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    // The record ID prevents collisions between repeated uploads with identical names.
+    zip.file(`${s.id}-${name}`, kind === 'files' ? fs.createReadStream(absPath(s.file_path)) : await reportDocx(reportInput(s)!));
+  }
+  res.attachment(kind === 'files' ? '大纲原文件.zip' : '大纲检查结果.zip');
+  res.type('application/zip');
+  try {
+    await pipeline(zip.generateNodeStream({ streamFiles: true }), res);
+  } catch (e) {
+    if (!res.headersSent && !res.destroyed) throw e;
+    res.destroy(e as Error);
+  }
 });
 
 userRouter.put('/submissions/:id', (req, res) => {

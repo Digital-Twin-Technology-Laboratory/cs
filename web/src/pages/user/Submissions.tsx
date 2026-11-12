@@ -1,4 +1,4 @@
-import { App, Button, Card, Empty, Input, Select, Space, Tooltip } from 'antd';
+import { App, Button, Card, DatePicker, Empty, Input, Select, Space, Tooltip } from 'antd';
 import Table from '../../components/ResponsiveTable';
 import { FileWordOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
@@ -10,6 +10,8 @@ import { fmtSize } from './CourseDetail';
 import { EditableNumber } from '../../components/EditableNumber';
 import EditableText from '../../components/EditableText';
 import type { SubmissionRow } from '../../types';
+import SubmissionAttachments from '../../components/SubmissionAttachments';
+import SubmissionFilters from '../../components/SubmissionFilters';
 
 interface Row extends SubmissionRow { username: string; user_name: string }
 
@@ -20,14 +22,17 @@ export default function Submissions() {
   const scope = params.get('scope') === 'college' ? 'college' : 'mine';
   const canViewCollege = user?.role === 'admin' || user?.college_role === 'teaching';
   const canEditRecords = user?.role === 'admin' || user?.college_role === 'teaching';
-  const [filters, setFilters] = useState({ q: '', status: '', confirmation: '' });
+  const [filters, setFilters] = useState({ q: '', status: '', confirmation: '', major: '', studentGrade: '', courseGroup: '', verdict: '', from: '', to: '' });
+  const [selected, setSelected] = useState<Row[]>([]);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ total: number; rows: Row[] }>({ total: 0, rows: [] });
   const [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await api.get(`/api/submissions?${qs({ ...filters, scope, page, pageSize: 20 })}`));
+      const result = await api.get<{ total: number; rows: Row[] }>(`/api/submissions?${qs({ ...filters, scope, page, pageSize: 20 })}`);
+      setData(result);
+      setSelected((prev) => prev.map((s) => result.rows.find((r) => r.id === s.id) ?? s));
     } catch (e) {
       setData({ total: 0, rows: [] });
       message.error((e as Error).message);
@@ -37,6 +42,7 @@ export default function Submissions() {
   }, [filters, scope, page, message]);
 
   useEffect(() => { load(); }, [load, canViewCollege]);
+  useEffect(() => { setSelected([]); }, [filters, scope]);
   const checking = data.rows.some((s) => s.status === 'queued' || s.status === 'running');
   useEffect(() => {
     if (!checking) return;
@@ -66,6 +72,10 @@ export default function Submissions() {
             options={[{ value: 'mine', label: '我的上传记录' }, { value: 'college', label: '全院检查记录' }]}
             onChange={(next) => { setPage(1); setParams(next === 'college' ? { scope: next } : {}); }} />}
           <Input.Search placeholder={scope === 'college' ? '课程 / 专业 / 上传人 / 文件名' : '课程 / 专业 / 文件名'} allowClear onSearch={(q) => filter({ q })} style={{ width: 280 }} />
+          <SubmissionFilters value={filters} onChange={filter} />
+          <Select aria-label="附件检查结论筛选" value={filters.verdict} onChange={(verdict) => filter({ verdict })} style={{ width: 130 }}
+            options={[{ value: '', label: '全部检查结论' }, { value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }]} />
+          <DatePicker.RangePicker onChange={(v) => filter({ from: v?.[0]?.format('YYYY-MM-DD') ?? '', to: v?.[1]?.format('YYYY-MM-DD') ?? '' })} />
           <Select
             aria-label="检查状态"
             value={filters.status}
@@ -92,10 +102,12 @@ export default function Submissions() {
           />
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
         </Space>
+        <SubmissionAttachments selected={selected} onClear={() => setSelected([])} />
         <Table<Row>
           rowKey="id"
           loading={loading}
           dataSource={data.rows}
+          rowSelection={{ selectedRowKeys: selected.map((s) => s.id), preserveSelectedRowKeys: true, onChange: (_, rows) => setSelected(rows) }}
           pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showSizeChanger: false, showTotal: (total) => `共 ${total} 条上传记录` }}
           locale={{ emptyText: <Empty description="暂无上传记录" /> }}
           columns={[

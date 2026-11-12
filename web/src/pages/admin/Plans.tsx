@@ -2,8 +2,9 @@ import { Alert, App, Button, Card, Col, Drawer, Form, Input, InputNumber, Modal,
 import Table from '../../components/ResponsiveTable';
 import { InboxOutlined, PlusOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, download } from '../../api';
+import type { Options } from '../../types';
 
 interface Row {
   id: number;
@@ -18,13 +19,25 @@ interface Row {
   updated_at: string;
 }
 
+interface Identification {
+  major: string | null;
+  trainingType: string | null;
+  ambiguous: boolean;
+  evidence: string[];
+}
+
 export default function Plans() {
   const { message } = App.useApp();
   const [rows, setRows] = useState<Row[]>([]);
   const [types, setTypes] = useState<string[]>([]);
+  const [majors, setMajors] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [identifying, setIdentifying] = useState(false);
+  const [identification, setIdentification] = useState<Identification | null>(null);
+  const [identifyError, setIdentifyError] = useState('');
+  const identifyRequest = useRef(0);
   const [editing, setEditing] = useState<number | null>(null);
   const [addForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -32,8 +45,31 @@ export default function Plans() {
   const load = useCallback(() => api.get<{ rows: Row[] }>('/api/admin/plans').then((r) => setRows(r.rows)), []);
   useEffect(() => {
     load();
-    api.get<{ trainingTypes: string[] }>('/api/admin/site').then((s) => setTypes(s.trainingTypes));
+    api.get<Options>('/api/options').then((s) => { setTypes(s.trainingTypes); setMajors(s.majors); });
   }, [load]);
+
+  const identify = async (fileList: UploadFile[]) => {
+    const request = ++identifyRequest.current;
+    setFiles(fileList.slice(-1));
+    setIdentification(null);
+    setIdentifyError('');
+    addForm.setFieldsValue({ major: undefined, trainingType: undefined });
+    const file = fileList.at(-1)?.originFileObj;
+    if (!file) { setIdentifying(false); return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    setIdentifying(true);
+    try {
+      const result = await api.post<Identification>('/api/admin/plans/identify', fd);
+      if (request !== identifyRequest.current) return;
+      setIdentification(result);
+      addForm.setFieldsValue({ major: result.major ?? undefined, trainingType: result.trainingType ?? undefined });
+    } catch (e) {
+      if (request === identifyRequest.current) setIdentifyError((e as Error).message);
+    } finally {
+      if (request === identifyRequest.current) setIdentifying(false);
+    }
+  };
 
   const add = async () => {
     const v = await addForm.validateFields();
@@ -48,6 +84,7 @@ export default function Plans() {
       message.success('培养方案已上传并提取文本');
       setAdding(false);
       setFiles([]);
+      setIdentification(null);
       addForm.resetFields();
       load();
     } catch (e) {
@@ -143,17 +180,29 @@ export default function Plans() {
         />
       </Card>
 
-      <Modal title="上传培养方案" open={adding} onOk={add} onCancel={() => setAdding(false)} okText="上传" confirmLoading={uploading} destroyOnHidden width={600}>
-        <Form form={addForm} layout="vertical" initialValues={{ grade: 2025 }} preserve={false}>
+      <Modal title="上传培养方案" open={adding} onOk={add} onCancel={() => { identifyRequest.current++; setIdentifying(false); setAdding(false); setFiles([]); setIdentification(null); setIdentifyError(''); }} okText="上传" confirmLoading={uploading} okButtonProps={{ disabled: identifying }} cancelButtonProps={{ disabled: uploading }} closable={!uploading} destroyOnHidden width={600}>
+        <Form form={addForm} layout="vertical" initialValues={{ grade: 2025 }} preserve={false} disabled={uploading}>
+          <Form.Item label="方案文件" required extra="支持 .docx、.pdf、.txt、.md；选择后按文件名或正文标题自动识别专业，可手动修正。">
+            <Upload.Dragger accept=".docx,.pdf,.txt,.md" maxCount={1} fileList={files} beforeUpload={() => false} onChange={({ fileList }) => identify(fileList)}>
+              <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+              <p className="ant-upload-text">点击或拖拽文件到此处</p>
+            </Upload.Dragger>
+          </Form.Item>
+          {identifying && <Alert type="info" showIcon title="正在识别方案专业…" style={{ marginBottom: 16 }} />}
+          {identifyError && <Alert type="error" showIcon title="专业识别失败，请手动选择或重新选择文件" description={identifyError} style={{ marginBottom: 16 }} />}
+          {identification && <Alert type={identification.major ? 'success' : 'warning'} showIcon
+            title={identification.major ? `已识别专业：${identification.major}（可在下方修正）` : identification.ambiguous ? '专业证据存在歧义，请手动选择专业与培养类型' : '未识别到明确专业，请手动选择专业与培养类型'}
+            description={identification.evidence.map((line) => <div key={line}>{line}</div>)} style={{ marginBottom: 16 }} />}
           <Row gutter={16}>
             <Col span={24}>
-              <Form.Item label="专业" name="major" rules={[{ required: true, message: '请填写专业全称' }]} extra="与教师上传时填写的专业名称一致才能自动匹配">
-                <Input placeholder="如：计算机科学与技术" />
+              <Form.Item label="专业" name="major" rules={[{ required: true, message: '请选择专业' }]} extra="专业、培养类型及年级相符时自动用于对应大纲检查">
+                <Select showSearch options={majors.map((major) => ({ value: major, label: major }))} placeholder="请选择专业" disabled={identifying || uploading}
+                  onChange={(major) => addForm.setFieldValue('trainingType', major === '计算机科学与技术（专转本）' ? '专转本' : '普通本科')} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
               <Form.Item label="培养类型" name="trainingType" rules={[{ required: true, message: '请选择' }]}>
-                <Select options={typeOptions} />
+                <Select options={typeOptions} disabled={identifying || uploading} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -164,14 +213,6 @@ export default function Plans() {
           </Row>
           <Form.Item label="方案名称" name="name" extra="留空则自动生成，如“2025级计算机科学与技术（普通本科）人才培养方案”">
             <Input />
-          </Form.Item>
-          <Form.Item label="方案文件" required extra="支持 .docx、.pdf、.txt、.md">
-            <Upload.Dragger accept=".docx,.pdf,.txt,.md" maxCount={1} fileList={files} beforeUpload={() => false} onChange={({ fileList }) => setFiles(fileList.slice(-1))}>
-              <p className="ant-upload-drag-icon">
-                <InboxOutlined />
-              </p>
-              <p className="ant-upload-text">点击或拖拽文件到此处</p>
-            </Upload.Dragger>
           </Form.Item>
         </Form>
       </Modal>
@@ -191,7 +232,8 @@ export default function Plans() {
           <Row gutter={16}>
             <Col xs={24} md={12}>
               <Form.Item label="专业" name="major" rules={[{ required: true }]}>
-                <Input />
+                <Select showSearch options={[...new Set([...majors, ...rows.map((row) => row.major)])].map((major) => ({ value: major, label: major }))}
+                  onChange={(major) => editForm.setFieldValue('trainingType', major === '计算机科学与技术（专转本）' ? '专转本' : '普通本科')} />
               </Form.Item>
             </Col>
             <Col xs={12} md={6}>

@@ -414,7 +414,7 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.deepEqual(revokedProfessional.program_scopes, []);
   assert.equal((await head('/api/supervision/progress?view=program')).status, 403);
 
-  await t.test('parallel classes count and track uploads separately for each writer', async () => {
+  await t.test('uploads automatically match the logged-in writer and track each writer separately', async () => {
     for (const userId of [aliceId, bobId]) {
       assert.equal((await admin(`/api/admin/users/${userId}/check-quota`, { amount: 2 })).status, 200);
     }
@@ -447,13 +447,14 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal(bobTask.latest_id, null);
     const options = (await bob('/api/options')).data.outlineCourses.filter((course) => course.name === name);
     assert.deepEqual(options.map((course) => course.writer_name).sort(), ['执笔人乙', '执笔人甲'].sort());
-    const ambiguousUpload = await upload(bob, name, cs);
+    const ambiguousUpload = await upload(admin, name, cs);
     assert.equal(ambiguousUpload.status, 400);
     assert.match(ambiguousUpload.data.error, /多个应交任务/);
 
-    const bobUpload = await upload(bob, name, cs, bobTask.id);
+    const bobUpload = await upload(bob, name, cs);
     assert.equal(bobUpload.status, 200);
     await finish(bobUpload.data.submissionId);
+    assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(bobUpload.data.submissionId).outline_requirement_id, bobTask.id);
     assert.equal((await importSource(admin, `${ambiguousCsv}\n${[...classes].reverse().join('\n')}`)).status, 200);
     for (const [request, task, submissionId] of [[alice, aliceTask, aliceUpload.data.submissionId], [bob, bobTask, bobUpload.data.submissionId]]) {
       const courses = (await request('/api/progress')).data.courses.filter((course) => course.course_name === name);
@@ -461,6 +462,26 @@ test('outline writers, scoped supervision and manual mappings use the course sou
       assert.equal(courses[0].id, task.id);
       assert.equal(courses[0].latest_id, submissionId);
     }
+  });
+
+  await t.test('manual selection overrides personal matching; multiple personal tasks still require selection', async () => {
+    assert.equal((await admin(`/api/admin/users/${aliceId}/check-quota`, { amount: 2 })).status, 200);
+    const tasks = (await admin('/api/supervision-management')).data.requirements;
+    const bobTask = tasks.find((row) => row.course_name === '数据库原理与设计' && row.user_id === bobId);
+    const selected = await upload(alice, bobTask.course_name, cs, bobTask.id);
+    assert.equal(selected.status, 200);
+    await finish(selected.data.submissionId);
+    const submission = database.prepare('SELECT user_id, outline_requirement_id FROM submissions WHERE id = ?').get(selected.data.submissionId);
+    assert.equal(submission.user_id, aliceId);
+    assert.equal(submission.outline_requirement_id, bobTask.id);
+    assert.equal(database.prepare('SELECT writer_user_id FROM outline_requirements WHERE id = ?').get(bobTask.id).writer_user_id, bobId);
+
+    const personalTasks = tasks.filter((row) => row.course_name === '交叉课程');
+    assert.equal(personalTasks.length, 2);
+    for (const task of personalTasks) assert.equal((await assignWriter(admin, task, aliceId)).status, 200);
+    const ambiguousUpload = await upload(alice, '交叉课程', cs);
+    assert.equal(ambiguousUpload.status, 400);
+    assert.match(ambiguousUpload.data.error, /课程名称.*下拉列表/);
   });
 
   await t.test('four upload majors use the selected 2023-2026 plan without a training-type selector', async () => {

@@ -30,9 +30,9 @@ export function findPlan(major: string, trainingType: string, grade: number) {
   // 兼容原有以“计算机科学与技术 + 专转本”保存的培养方案。
   return db
     .prepare(
-      'SELECT id, name, extracted_text FROM training_plans WHERE major IN (?, ?) AND training_type = ? AND grade = ? AND enabled = 1 ORDER BY (major = ?) DESC, updated_at DESC LIMIT 1',
+      "SELECT id, name, extracted_text, file_path IS NOT NULL AND file_path != '' AS downloadable FROM training_plans WHERE major IN (?, ?) AND training_type = ? AND grade = ? AND enabled = 1 ORDER BY (major = ?) DESC, updated_at DESC LIMIT 1",
     )
-    .get(major, transfer ? '计算机科学与技术' : major, transfer ? '专转本' : trainingType, grade, major) as { id: number; name: string; extracted_text: string } | undefined;
+    .get(major, transfer ? '计算机科学与技术' : major, transfer ? '专转本' : trainingType, grade, major) as { id: number; name: string; extracted_text: string; downloadable: number } | undefined;
 }
 
 let running = 0;

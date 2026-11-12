@@ -15,10 +15,11 @@ import { cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../
 import { kickQueue } from '../services/checkQueue.js';
 import { getCheckQuota } from '../services/checkQuota.js';
 import { readRoster, RosterImportError } from '../services/rosterImport.js';
-import { getOutlineRows, groupOutlinePeople, summarizeOutlines } from '../services/outlineProgress.js';
+import { getOutlineRows, groupOutlinePeople, matchesOutline, summarizeOutlines } from '../services/outlineProgress.js';
 import { COLLEGE_PRESETS, GROUP_PRESETS } from '../services/supervisionRoles.js';
 import { passwordSchema } from './auth.js';
 import { COURSE_LIST_SQL } from './user.js';
+import { identifyPlanMajor } from '../services/planIdentification.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -340,7 +341,7 @@ adminRouter.delete('/courses/:id', (req, res) => {
 });
 
 adminRouter.get('/submissions', (req, res) => {
-  const { q = '', status = '', verdict = '', userId = '', from = '', to = '', confirmation = '' } = req.query as Record<string, string>;
+  const { q = '', status = '', verdict = '', userId = '', from = '', to = '', confirmation = '', major = '', studentGrade = '', courseGroup = '' } = req.query as Record<string, string>;
   const { page, pageSize, offset } = paging(req.query);
   const where = ['1=1'];
   const args: unknown[] = [];
@@ -348,6 +349,12 @@ adminRouter.get('/submissions', (req, res) => {
   if (status) where.push('s.status = ?'), args.push(status);
   if (verdict) where.push('s.verdict = ?'), args.push(verdict);
   if (userId) where.push('s.user_id = ?'), args.push(Number(userId));
+  if (major) where.push("json_extract(s.course_snapshot, '$.major') = ?"), args.push(major);
+  if (studentGrade) where.push("json_extract(s.course_snapshot, '$.studentGrade') = ?"), args.push(Number(studentGrade));
+  if (courseGroup) {
+    where.push(`EXISTS (SELECT 1 FROM outline_requirements r JOIN courses c ON c.id = s.course_id WHERE ${matchesOutline('s', 'c')} AND r.course_group = ?)`);
+    args.push(courseGroup);
+  }
   if (from) where.push('date(s.created_at) >= ?'), args.push(from);
   if (to) where.push('date(s.created_at) <= ?'), args.push(to);
   if (confirmation === 'pending') where.push('s.confirmed_at IS NULL');
@@ -560,11 +567,26 @@ adminRouter.get('/plans/:id', (req, res) => {
   res.json({ plan: p });
 });
 
+adminRouter.post('/plans/identify', singleUpload(['.docx', '.pdf', '.txt', '.md']), async (req, res) => {
+  const file = req.file;
+  try {
+    if (!file) return res.status(400).json({ error: '请选择培养方案文件' });
+    const text = await extractFile(file.path, file.originalname);
+    res.json(identifyPlanMajor(file.originalname, text));
+  } catch (e) {
+    if (e instanceof ExtractError) return res.status(400).json({ error: e.message });
+    throw e;
+  } finally {
+    cleanupTmp(file);
+  }
+});
+
 adminRouter.post('/plans', singleUpload(['.docx', '.pdf', '.txt', '.md']), async (req, res) => {
   const file = req.file;
   try {
     if (!file) return res.status(400).json({ error: '请选择培养方案文件' });
     const body = planFields.parse(req.body);
+    if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
     const name = body.name || `${body.grade}级${body.major}（${body.trainingType}）人才培养方案`;
     const text = await extractFile(file.path, file.originalname);
     const rel = storeFile(file.path, 'plans', file.originalname);
@@ -586,6 +608,7 @@ adminRouter.put('/plans/:id', (req, res) => {
   const p = db.prepare('SELECT * FROM training_plans WHERE id = ?').get(id) as { name: string } | undefined;
   if (!p) return res.status(404).json({ error: '培养方案不存在' });
   const body = planFields.extend({ extractedText: z.string().min(1, '方案文本不能为空'), enabled: z.boolean() }).parse(req.body);
+  if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
   db.prepare(
     "UPDATE training_plans SET major=?, training_type=?, grade=?, name=?, extracted_text=?, enabled=?, updated_at=datetime('now','localtime') WHERE id=?",
   ).run(body.major, body.trainingType, body.grade, body.name || p.name, body.extractedText, body.enabled, id);

@@ -4,7 +4,7 @@ import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/ico
 import type { UploadFile } from 'antd';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../../api';
+import { api, qs } from '../../api';
 import { useAuth } from '../../auth';
 import type { CourseInfo, Options } from '../../types';
 
@@ -18,6 +18,36 @@ interface UploadResult {
   error?: string;
 }
 
+function MatchedPlan({ uid }: { uid: string }) {
+  const form = Form.useFormInstance<UploadValues>();
+  const major = Form.useWatch(['outlines', uid, 'major'], form);
+  const grade = Form.useWatch('planGrade', form);
+  const [plan, setPlan] = useState<{ id: number; name: string; downloadable: boolean } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!major || !grade) return;
+    let current = true;
+    setLoading(true);
+    setPlan(null);
+    setError('');
+    api.get<{ plan: typeof plan }>(`/api/plan-match?${qs({ major, grade, trainingType: major === '计算机科学与技术（专转本）' ? '专转本' : '普通本科' })}`)
+      .then((result) => { if (current) setPlan(result.plan); })
+      .catch((e) => { if (current) setError((e as Error).message); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [major, grade]);
+
+  if (!major) return <span className="muted small">选择专业后自动匹配培养方案</span>;
+  if (loading) return <span className="muted small">正在匹配培养方案…</span>;
+  if (error) return <span className="small" style={{ color: '#cf1322' }}>匹配失败：{error}</span>;
+  if (!plan) return <span className="small" style={{ color: '#ad6800' }}>未预置{grade}级{major}培养方案；仍可检查，方案比对项需核实。</span>;
+  return <div className="small"><div>对应方案：{plan.name}</div>{plan.downloadable
+    ? <Button type="link" size="small" icon={<DownloadOutlined />} href={`/api/plans/${plan.id}/file`}>下载对应培养方案</Button>
+    : <span className="muted">方案原文件未上传</span>}</div>;
+}
+
 export default function Upload() {
   const { message } = App.useApp();
   const { checkQuota, refresh } = useAuth();
@@ -27,8 +57,9 @@ export default function Upload() {
   const [results, setResults] = useState<Record<string, UploadResult>>({});
   const [submitting, setSubmitting] = useState(false);
   const [activeUid, setActiveUid] = useState<string | null>(null);
+  const planGrade = Form.useWatch('planGrade', form) ?? 2025;
   const pendingCount = files.filter((file) => !results[file.uid]?.submissionId).length;
-  const downloadablePlans = (options?.plans ?? []).filter((plan) => plan.grade === 2025 && plan.downloadable);
+  const downloadablePlans = (options?.plans ?? []).filter((plan) => plan.grade === planGrade && plan.downloadable);
 
   useEffect(() => {
     api.get<Options>('/api/options').then(setOptions).catch((e) => message.error(e.message));
@@ -105,8 +136,8 @@ export default function Upload() {
               items: downloadablePlans.map((plan) => ({ key: plan.id, label: <a href={`/api/plans/${plan.id}/file`}>{plan.name}</a> })),
             }}>
               <Button icon={<DownloadOutlined />} disabled={!downloadablePlans.length} style={{ marginBottom: 24 }}
-                title={!downloadablePlans.length ? '管理员尚未上传可下载的2025级人才培养方案' : '选择专业对应的培养方案'}>
-                下载25级人才培养方案
+                title={!downloadablePlans.length ? `管理员尚未上传可下载的${planGrade}级人才培养方案` : '选择专业对应的培养方案'}>
+                下载{String(planGrade).slice(-2)}级人才培养方案
               </Button>
             </Dropdown>
           </div>
@@ -159,7 +190,7 @@ export default function Upload() {
                             { name: ['outlines', file.uid, 'outlineRequirementId'], value: option.requirementId },
                           ])}
                           filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
-                          <Input maxLength={100} aria-label={`${file.name}的课程名称`} />
+                          <Input maxLength={100} placeholder="输入课程名或从下拉列表选择任务" aria-label={`${file.name}的课程名称`} />
                         </AutoComplete>
                       </Form.Item>
                     </>
@@ -176,9 +207,12 @@ export default function Upload() {
                 {
                   title: '专业', width: 260,
                   render: (_: unknown, file: UploadFile) => (
-                    <Form.Item name={['outlines', file.uid, 'major']} rules={[{ required: true, message: '请选择专业' }]} style={{ marginBottom: 0 }} preserve={false}>
-                      <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />
-                    </Form.Item>
+                    <>
+                      <Form.Item name={['outlines', file.uid, 'major']} rules={[{ required: true, message: '请选择专业' }]} style={{ marginBottom: 6 }} preserve={false}>
+                        <Select placeholder="选择专业" disabled={submitting || !!results[file.uid]?.submissionId} aria-label={`${file.name}的专业`} onChange={() => form.setFieldValue(['outlines', file.uid, 'outlineRequirementId'], undefined)} options={(options?.majors ?? []).map((m) => ({ value: m, label: m }))} />
+                      </Form.Item>
+                      <MatchedPlan uid={file.uid} />
+                    </>
                   ),
                 },
                 {
@@ -198,7 +232,7 @@ export default function Upload() {
               ]}
             />
           )}
-          {files.length > 0 && <p className="muted small">请从云清单下拉选择准确课程、课程组及执笔人，系统会关联对应应交任务并填入审核专业；不同执笔人的同名课程分别计入各自进度。执笔人尚未指定也可上传，系统记录实际上传人并同步课程组进度。系统按每行专业匹配培养方案，未预置方案时仍可检查；名单外课程也可手工填写上传。</p>}
+          {files.length > 0 && <p className="muted small">系统优先按当前登录账号、课程名称和专业自动关联应交任务；无法唯一匹配或需代他人上传时，请点击“课程名称”输入框，从下拉列表中选择具体课程、课程组及执笔人，系统会填入审核专业。不同执笔人的同名课程分别计入各自进度。执笔人尚未指定也可上传，系统记录实际上传人并同步课程组进度。系统按每行专业匹配培养方案，未预置方案时仍可检查；名单外课程也可手工填写上传。</p>}
           <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
             {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>

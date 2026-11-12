@@ -1,12 +1,13 @@
 import { Alert, App, Button, Card, Col, Input, Popconfirm, Row, Select, Space, Statistic, Tabs, Tag } from 'antd';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, qs } from '../../api';
+import { api, download, qs } from '../../api';
 import { useAuth } from '../../auth';
 import Table from '../../components/ResponsiveTable';
 import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import type { SubStatus } from '../../types';
 import StoredNumber, { useStoredNumber } from '../../components/EditableNumber';
+import SubmissionAttachments from '../../components/SubmissionAttachments';
 
 export interface RequirementRow {
   id: number;
@@ -59,6 +60,8 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [confirming, setConfirming] = useState<number | null>(null);
+  const [selected, setSelected] = useState<React.Key[]>([]);
+  useEffect(() => { setSelected([]); }, [view, group, program, q, status]);
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -108,8 +111,10 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
   const confirmed = scoped.filter(isConfirmed).length;
   const unassigned = scoped.filter((r) => r.user_id === null && !r.writer_name && !r.username).length;
   const courseRows = scoped.filter((r) => status === 'missing' ? r.latest_id === null : status === 'uploaded' ? r.latest_id !== null
-    : status === 'pending' ? !isConfirmed(r) : status === 'confirmed' ? isConfirmed(r) : true);
+    : status === 'pending' ? !isConfirmed(r) : status === 'confirmed' ? isConfirmed(r) : status === 'passed' ? isPassed(r)
+    : status === 'not-passed' ? r.status === 'done' && r.verdict === 'failed' : true);
   const courseTable = (rows: RequirementRow[], paginated = false) => <Table<RequirementRow> rowKey="id" size="small" dataSource={rows}
+    rowSelection={paginated ? { selectedRowKeys: selected, preserveSelectedRowKeys: true, onChange: setSelected, getCheckboxProps: (r) => ({ disabled: r.latest_id === null }) } : undefined}
     pagination={paginated ? { current: page, pageSize: 20, showSizeChanger: false, total: rows.length, onChange: setPage, showTotal: (n) => `共 ${n} 门课程（平行班已合并）` } : false}
     columns={[
       { title: '应交课程', width: 280, render: (_, r) => <div>{r.course_name}<div className="muted small">课程组：{r.course_group || '未分组'}</div><div className="muted small">审核专业：{r.professional || '未配置'}</div></div> },
@@ -119,6 +124,8 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
       { title: '最终确认', width: 170, render: (_, r) => <div><ConfirmationTag status={r.status} confirmedAt={r.confirmed_at} />{r.confirmed_by && <div className="muted small">{r.confirmed_by}</div>}</div> },
       { title: '操作', width: 150, render: (_, r) => <Space orientation="vertical" size={6}>
         {r.latest_id !== null && <Link to={`/submissions/${r.latest_id}`}>在线查看大纲与结果</Link>}
+        {r.latest_id !== null && <Button size="small" onClick={() => download(`/api/submissions/${r.latest_id}/file`)}>下载原文件</Button>}
+        {r.latest_id !== null && r.status === 'done' && <Button size="small" onClick={() => download(`/api/submissions/${r.latest_id}/report.docx`)}>下载检查结果</Button>}
         {r.can_confirm && r.latest_id !== null && r.status === 'done' && !r.confirmed_at && <Popconfirm title="组长最终确认此份大纲？" description="确认后直接视为最终确认，无需教师再次确认。" onConfirm={() => confirm(r.latest_id!)}><Button size="small" type="primary" loading={confirming === r.latest_id}>组长最终确认</Button></Popconfirm>}
       </Space> },
     ]} />;
@@ -153,7 +160,8 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
         description="课程进度取对应课程的最新上传、检查和确认，不要求预先指定执笔人。执笔人待定也可上传，系统记录实际上传人；组长可查看本组课程并最终确认，新上传需确认新结果。上方统计随课程组、审核专业和搜索变化，不受课程状态筛选影响。" />
       <Tabs defaultActiveKey="courses" onChange={() => setPage(1)} items={[
         { key: 'courses', label: '逐门课程', children: <>
-          <Select value={status} aria-label="监督上传状态筛选" onChange={(v) => { setStatus(v); setPage(1); }} style={{ width: 180, marginBottom: 16 }} options={[{ value: '', label: '全部状态' }, { value: 'missing', label: '未上传' }, { value: 'uploaded', label: '已上传' }, { value: 'pending', label: '未最终确认' }, { value: 'confirmed', label: '已最终确认' }]} />
+          <Select value={status} aria-label="监督上传状态筛选" onChange={(v) => { setStatus(v); setPage(1); }} style={{ width: 180, marginBottom: 16 }} options={[{ value: '', label: '全部状态' }, { value: 'missing', label: '未上传' }, { value: 'uploaded', label: '已上传' }, { value: 'pending', label: '未最终确认' }, { value: 'confirmed', label: '已最终确认' }, { value: 'passed', label: '检查已通过' }, { value: 'not-passed', label: '检查未通过' }]} />
+          <SubmissionAttachments selected={courseRows.filter((r) => selected.includes(r.id) && r.latest_id !== null).map((r) => ({ id: r.latest_id!, status: r.status }))} onClear={() => setSelected([])} />
           {courseTable(courseRows, true)}
         </> },
         { key: 'people', label: '人员进度', children: <>

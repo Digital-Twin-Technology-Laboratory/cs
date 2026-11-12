@@ -8,6 +8,8 @@ import { api, download, qs } from '../../api';
 import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import { fmtSize } from '../user/CourseDetail';
 import type { CourseRow, SubmissionRow } from '../../types';
+import SubmissionAttachments from '../../components/SubmissionAttachments';
+import SubmissionFilters from '../../components/SubmissionFilters';
 
 interface SubRow extends SubmissionRow {
   ai_model: string | null;
@@ -31,14 +33,17 @@ function useAct(reload: () => void) {
 }
 
 function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialStatus?: string }) {
-  const [f, setF] = useState({ q: '', status: initialStatus ?? '', verdict: '', confirmation: '', from: '', to: '' });
+  const [f, setF] = useState({ q: '', status: initialStatus ?? '', verdict: '', confirmation: '', from: '', to: '', major: '', studentGrade: '', courseGroup: '' });
+  const [selected, setSelected] = useState<SubRow[]>([]);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ total: number; rows: SubRow[] }>({ total: 0, rows: [] });
   const [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await api.get(`/api/admin/submissions?${qs({ ...f, userId, page, pageSize: 20 })}`));
+      const result = await api.get<{ total: number; rows: SubRow[] }>(`/api/admin/submissions?${qs({ ...f, userId, page, pageSize: 20 })}`);
+      setData(result);
+      setSelected((prev) => prev.map((s) => result.rows.find((r) => r.id === s.id) ?? s));
     } finally {
       setLoading(false);
     }
@@ -46,6 +51,7 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => { setSelected([]); }, [f, userId]);
   const act = useAct(load);
   const set = (patch: Partial<typeof f>) => (setPage(1), setF((x) => ({ ...x, ...patch })));
 
@@ -54,6 +60,7 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
       <Space wrap style={{ marginBottom: 12, justifyContent: 'space-between', width: '100%' }}>
         <Space wrap>
           <Input.Search placeholder="课程 / 专业 / 提交人 / 文件名" allowClear onSearch={(q) => set({ q })} style={{ width: 260 }} />
+          <SubmissionFilters value={f} onChange={set} />
           <Select
             value={f.status}
             onChange={(status) => set({ status })}
@@ -95,11 +102,13 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
           <Button icon={<ReloadOutlined />}>重新检查失败记录</Button>
         </Popconfirm>
       </Space>
-      <Table
+      <SubmissionAttachments selected={selected} onClear={() => setSelected([])} />
+      <Table<SubRow>
         rowKey="id"
         size="middle"
         loading={loading}
         dataSource={data.rows}
+        rowSelection={{ selectedRowKeys: selected.map((s) => s.id), preserveSelectedRowKeys: true, onChange: (_, rows) => setSelected(rows) }}
         pagination={{ current: page, pageSize: 20, total: data.total, onChange: setPage, showTotal: (t) => `共 ${t} 条` }}
         columns={[
           { title: '课程', dataIndex: 'course_name', render: (v, r) => <Link to={`/submissions/${r.id}`}>{v}</Link> },

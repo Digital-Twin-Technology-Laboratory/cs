@@ -31,7 +31,7 @@ export interface OutlineProgressRow {
 // The legacy upload form called the cooperative program "中外物联网".
 const matchingMajor = (course: string, requirement: string) => `(${course}.major = ${requirement}.professional OR (${course}.major = '中外物联网' AND ${requirement}.professional = '物联网工程（合作办学）'))`;
 
-function matchesOutline(submission: string, course: string) {
+export function matchesOutline(submission: string, course: string) {
   return `(${submission}.outline_requirement_id = r.id OR (
     ${submission}.outline_requirement_id IS NULL
     AND TRIM(${course}.name) = r.course_name COLLATE NOCASE AND ${matchingMajor(course, 'r')}
