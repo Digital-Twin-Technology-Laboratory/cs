@@ -9,7 +9,7 @@ import { audit, db } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { getSettings } from '../settings.js';
 import { activeChecklistId, loadChecklist } from '../services/checklist.js';
-import { extractFile, ExtractError, SUPPORTED_DOC_EXT } from '../services/extract.js';
+import { docxToHtml, extractFile, ExtractError, SUPPORTED_DOC_EXT } from '../services/extract.js';
 import { absPath, cleanupTmp, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { findPlan, kickQueue, type CourseSnapshot } from '../services/checkQueue.js';
 import { aiReady } from '../services/ai/provider.js';
@@ -56,6 +56,22 @@ userRouter.get('/checklist', (_req, res) => {
 
 userRouter.get('/syllabus-template.docx', (_req, res) => {
   res.download(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'), '教学大纲模板.docx');
+});
+
+userRouter.get('/syllabus-template/preview', async (_req, res) => {
+  const html = await docxToHtml(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'));
+  res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+  res.type('html').send(`<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教学大纲模板预览</title>
+<style>
+body { margin: 24px; font: 14px/1.8 'Microsoft YaHei', sans-serif; color: #1f2329; overflow-wrap: anywhere; }
+p { margin: 8px 0; }
+table { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 16px 0; }
+td, th { border: 1px solid #d9d9d9; padding: 6px; vertical-align: top; }
+img { max-width: 100%; height: auto; }
+@media (max-width: 600px) { body { margin: 12px; } td, th { padding: 4px; } }
+</style></head><body>${html}</body></html>`);
 });
 
 userRouter.get('/checklist.docx', async (_req, res) => {

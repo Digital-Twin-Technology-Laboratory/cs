@@ -1,6 +1,6 @@
-import { Alert, App, AutoComplete, Button, Card, Dropdown, Form, Input, Select, Space, Tag, Upload as AntUpload } from 'antd';
+import { Alert, App, AutoComplete, Button, Card, Dropdown, Form, Input, Modal, Select, Space, Tag, Upload as AntUpload } from 'antd';
 import Table from '../../components/ResponsiveTable';
-import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownloadOutlined, EyeOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -112,6 +112,7 @@ export default function Upload() {
   const [results, setResults] = useState<Record<string, UploadResult>>({});
   const [identifications, setIdentifications] = useState<Record<string, IdentificationState>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [templatePreviewOpen, setTemplatePreviewOpen] = useState(false);
   const [activeUid, setActiveUid] = useState<string | null>(null);
   const planGrade = Form.useWatch('planGrade', form) ?? 2025;
   const pendingCount = files.filter((file) => !results[file.uid]?.submissionId).length;
@@ -192,6 +193,7 @@ export default function Upload() {
       </div>
       <Card title="上传前自查" style={{ marginBottom: 16 }}>
         <Space wrap style={{ marginBottom: 12 }}>
+          <Button icon={<EyeOutlined />} onClick={() => setTemplatePreviewOpen(true)}>预览教学大纲模板</Button>
           <Button icon={<DownloadOutlined />} href="/api/syllabus-template.docx">下载教学大纲模板</Button>
           <Button icon={<DownloadOutlined />} href="/api/checklist.docx" disabled={!options?.checklist}>下载检查清单</Button>
         </Space>
@@ -201,6 +203,15 @@ export default function Upload() {
         </div>
         {options && !options.checklist && <div className="muted small">管理员尚未设置生效的检查清单，请联系管理员。</div>}
       </Card>
+      <Modal title="教学大纲模板预览" open={templatePreviewOpen} width={1100} destroyOnHidden onCancel={() => setTemplatePreviewOpen(false)}
+        footer={<Space wrap>
+          <Button icon={<DownloadOutlined />} href="/api/syllabus-template.docx">下载 Word 原文件</Button>
+          <Button onClick={() => setTemplatePreviewOpen(false)}>关闭</Button>
+        </Space>}>
+        <p className="muted small">在线预览展示模板正文和表格，字体、页边距及分页请以下载的 Word 原文件为准。</p>
+        <iframe title="教学大纲模板内容" src="/api/syllabus-template/preview" sandbox=""
+          style={{ width: '100%', height: '65vh', border: '1px solid #d9d9d9', borderRadius: 4 }} />
+      </Modal>
       {options && !options.aiReady && <Alert type="warning" showIcon style={{ marginBottom: 16 }} title="管理员尚未完成 AI 配置，暂时无法提交检查。" />}
       {checkQuota?.remaining === 0 && (
         <Alert type="warning" showIcon style={{ marginBottom: 16 }}

@@ -350,7 +350,7 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal((await client()(`/api/submissions/${id}/report.docx`)).status, 401);
   });
 
-  await t.test('teachers can download the original syllabus template; login is required', async () => {
+  await t.test('teachers can preview and download the original syllabus template; login is required', async () => {
     const url = '/api/syllabus-template.docx';
     assert.equal((await client()(url)).status, 401);
     const response = await teacher(url);
@@ -359,6 +359,15 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.deepEqual(response.data, readFileSync(path.join(root, 'server/assets/syllabus-template.docx')));
     const extracted = (await mammoth.extractRawText({ buffer: response.data })).value;
     for (const type of ['课程教学大纲', '课程设计', '实习/实训/社会实践', '毕业论文（设计）']) assert.ok(extracted.includes(type), type);
+    const previewUrl = '/api/syllabus-template/preview';
+    assert.equal((await client()(previewUrl)).status, 401);
+    const preview = await teacher(previewUrl);
+    assert.equal(preview.status, 200);
+    assert.match(preview.headers.get('content-type'), /text\/html/);
+    assert.match(preview.headers.get('content-security-policy'), /default-src 'none'.*sandbox/);
+    const html = preview.data.toString();
+    for (const type of ['课程教学大纲', '课程设计', '实习/实训/社会实践', '毕业论文（设计）']) assert.ok(html.includes(type), type);
+    assert.match(html, /<table>/);
   });
 
   await t.test('upload sequences follow course identity instead of a newly created course ID', async () => {
