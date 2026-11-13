@@ -141,7 +141,7 @@ export default function Plans() {
       <div className="page-head">
         <div>
           <h1>培养方案管理</h1>
-          <div className="sub">按专业、培养类型、年级预置人才培养方案。用户上传大纲时，系统按课程的专业、培养类型和对照方案年级自动带入对照。</div>
+          <div className="sub">按专业、培养类型、年级预置人才培养方案。全校合订方案请选择“公共”；公共课程检查时由 AI 定位适用专业，再使用对应专业章节。</div>
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>
           上传培养方案
@@ -222,7 +222,7 @@ export default function Plans() {
             description={identification.evidence.map((line) => <div key={line}>{line}</div>)} style={{ marginBottom: 16 }} />}
           <Row gutter={16}>
             <Col span={24}>
-              <Form.Item label="专业" name="major" rules={[{ required: true, message: '请选择专业' }]} extra="专业、培养类型及年级相符时自动用于对应大纲检查">
+              <Form.Item label="专业" name="major" rules={[{ required: true, message: '请选择专业' }]} extra="全校培养方案合订本选“公共”，请保留各专业标题、毕业要求和支撑矩阵。专业、培养类型及年级相符时用于对应大纲检查。">
                 <Select showSearch options={majors.map((major) => ({ value: major, label: major }))} placeholder="请选择专业" disabled={identifying || uploading}
                   onChange={(major) => addForm.setFieldValue('trainingType', major === '计算机科学与技术（专转本）' ? '专转本' : '普通本科')} />
               </Form.Item>

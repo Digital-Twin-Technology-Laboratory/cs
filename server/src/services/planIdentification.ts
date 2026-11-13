@@ -1,8 +1,13 @@
 import path from 'node:path';
+import { splitPublicPlan } from './publicPlan.js';
 
-export const PLAN_MAJORS = ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能'] as const;
+export const PLAN_MAJORS = ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能', '公共'] as const;
 
 export function identifyPlanMajor(fileName: string, text: string) {
+  const sections = splitPublicPlan(text);
+  if (sections.length > 1) {
+    return { major: '公共', trainingType: '普通本科', ambiguous: false, evidence: [`全校合订方案：识别到 ${sections.length} 个专业章节（${sections.map((section) => section.major).join('、')}）`] };
+  }
   const titleLines = text.slice(0, 1500).split(/\r?\n/).map((line) => line.replace(/^#+\s*/, '').replace(/\s/g, '')).filter(Boolean).slice(0, 12);
   const sources = [
     { label: '文件名', value: path.basename(fileName, path.extname(fileName)) },

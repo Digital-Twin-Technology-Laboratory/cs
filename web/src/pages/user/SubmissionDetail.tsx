@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import ResultView, { SubmissionMeta } from '../../components/ResultView';
+import SubmissionCourseEditor from '../../components/SubmissionCourseEditor';
 import type { ChecklistItem, SectionMeta, SubmissionDetail as Sub } from '../../types';
 
 interface Resp {
@@ -101,6 +102,7 @@ export default function SubmissionDetail() {
             {isOther && `提交人：${s.owner?.name}（${s.owner?.username}）　`}检查清单：{data.checklist?.name ?? '—'}
           </div>
         </div>
+        <SubmissionCourseEditor id={s.id} name={s.course.name} status={s.status} onSaved={load} />
       </div>
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Collapse className="no-print" items={[{ key: 'meta', label: '查看课程与上传信息', children: <SubmissionMeta sub={s} /> }]} />

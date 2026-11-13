@@ -10,6 +10,7 @@ import { fmtSize } from '../user/CourseDetail';
 import type { CourseRow, SubmissionRow } from '../../types';
 import SubmissionAttachments from '../../components/SubmissionAttachments';
 import SubmissionFilters from '../../components/SubmissionFilters';
+import SubmissionCourseEditor from '../../components/SubmissionCourseEditor';
 
 interface SubRow extends SubmissionRow {
   ai_model: string | null;
@@ -146,10 +147,11 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
           { title: '文件上传时间', dataIndex: 'created_at', width: 165 },
           {
             title: '操作',
-            width: 230,
+            width: 280,
             fixed: 'right',
             render: (_, r) => (
-              <Space size={0}>
+              <Space size={0} wrap>
+                <SubmissionCourseEditor id={r.id} name={r.course_name} status={r.status} onSaved={load} />
                 <Button type="link" size="small" onClick={() => download(`/api/submissions/${r.id}/file`)}>
                   原文件
                 </Button>

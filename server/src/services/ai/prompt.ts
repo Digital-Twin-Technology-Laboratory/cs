@@ -1,4 +1,5 @@
 import { SECTION_META, SYLLABUS_SCOPE_RULES, type Section } from '../../seed/checklist.js';
+import type { PublicPlanMatch } from '../publicPlan.js';
 
 export const DEFAULT_SYSTEM_PROMPT = `你是本科教学大纲审查助手，服务于高校本科教学合格评估的大纲检查工作。你的任务是：严格按照用户提供的《检查清单》和《判定规则》，逐项检查一份课程教学大纲，并输出规范的检查结果。
 
@@ -62,6 +63,7 @@ export interface PromptInput {
     studentGrade: number;
     planGrade: number;
     adjustNote: string;
+    publicPlanMatch?: PublicPlanMatch;
   };
   plan: { name: string; text: string } | null;
   syllabus: { fileName: string; text: string };
@@ -84,15 +86,19 @@ export function buildUserPrompt(p: PromptInput): string {
   parts.push(`\n# 本次检查范围（优先于清单中的旧版跨材料要求）\n${SYLLABUS_SCOPE_RULES}\n建议完善中的跨材料条目在 itemResults 中记为“不适用”，note 说明仅作提醒，不写入 issues 或 toVerify；报告会固定展示相关材料一致性提醒。`);
 
   const c = p.course;
+  const publicCourse = c.major === '公共';
   parts.push(
-    `\n# 课程信息\n- 课程名称：${c.name}\n- 专业：${c.major}\n- 培养类型：${c.trainingType}\n- 学生年级：${c.studentGrade}级\n- 对照方案：${c.planGrade}级${c.major}（${c.trainingType}）人才培养方案` +
+    `\n# 课程信息\n- 课程名称：${c.name}\n- 专业：${c.major}\n- 培养类型：${c.trainingType}\n- 学生年级：${c.studentGrade}级\n- 对照方案：${publicCourse ? p.plan?.name ?? `${c.planGrade}级全校培养方案（适用专业待核实）` : `${c.planGrade}级${c.major}（${c.trainingType}）人才培养方案`}` +
       (c.adjustNote ? `\n- 对照方案调整说明：${c.adjustNote}` : ''),
   );
   parts.push(`\n# 专业与毕业要求比对边界
-- 以本次课程信息中用户选择的专业、培养类型和对照方案年级为准；不根据同名课程、课程清单中的审核专业或文件名切换专业与方案。
+- ${publicCourse ? '“公共”仅表示从全校合订方案定位；实际专业以以下适用专业定位结果为准。逐个专业核对各自的毕业要求指标全文、课程设置和本课程支撑矩阵，不得将不同专业的编号、学时或H/M/L混用。意见须注明所属专业；同一课程在不同专业要求不同不是大纲内部矛盾。未定位的专业范围列为需核实，不猜测。' : '以本次课程信息中用户选择的专业、培养类型和对照方案年级为准；不根据同名课程、课程清单中的审核专业或文件名切换专业与方案。'}
 - 区分毕业要求指标正文、课程设置与毕业要求的支撑矩阵、毕业要求与培养目标的关系表。只用本课程在课程支撑矩阵中的行核对支撑点；不能用培养目标关系表代替。
 - 判定课程目标与毕业要求关系存在问题时，必须同时给出大纲实际写法和所选培养方案对应指标或本课程矩阵单元格的原文依据，说明具体差异。已与方案一致的对应关系不得判错；不机械要求课程目标与指标一一对应。
 - PDF 提取后的连续 H/M/L 不代表连续指标列，空白列可能未显示。优先使用按页面坐标还原的矩阵；若表头、课程行、指标编号或列对应关系无法可靠辨认，相关比对列入 toVerify，不能猜测支撑点或据此写入 issues。`);
+  if (c.publicPlanMatch) {
+    parts.push(`\n# 公共课程适用专业定位结果\n${JSON.stringify(c.publicPlanMatch)}\n仅使用下方已定位专业的章节；unresolved 中的范围只列为需核实。`);
+  }
 
   if (p.plan) {
     parts.push(`\n# 对照培养方案：${p.plan.name}\n<training_plan>\n${p.plan.text}\n</training_plan>`);

@@ -95,6 +95,7 @@ export interface CourseInfo {
   studentGrade: number;
   planGrade: number;
   adjustNote: string;
+  publicPlanMatch?: { matches: { major: string; evidence: string }[]; unresolved: string[] };
 }
 
 export interface SubmissionDetail {

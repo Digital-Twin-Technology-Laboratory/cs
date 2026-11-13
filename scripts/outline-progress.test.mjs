@@ -499,10 +499,10 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal(database.prepare('SELECT outline_requirement_id FROM submissions WHERE id = ?').get(ambiguousUpload.data.submissionId).outline_requirement_id, null);
   });
 
-  await t.test('four upload majors use the selected 2023-2026 plan without a training-type selector', async () => {
+  await t.test('upload majors use the selected 2023-2026 plan without a training-type selector', async () => {
     const transferMajor = '计算机科学与技术（专转本）';
     const options = (await admin('/api/options')).data;
-    assert.deepEqual(options.majors, [cs, transferMajor, iot, ai]);
+    assert.deepEqual(options.majors, [cs, transferMajor, iot, ai, '公共']);
     assert.deepEqual(options.studentGrades, [2023, 2024, 2025, 2026]);
     assert.ok((await admin('/api/supervision-management')).data.programs.includes(transferMajor));
     for (const grade of options.studentGrades) {
@@ -710,5 +710,60 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal(database.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = '确认提交' AND target = ?").get(`记录#${id}`).n, 2);
     assert.equal((await alice(`/api/submissions/${historicalId}/withdraw`, {})).status, 200);
     assert.deepEqual((await admin('/api/admin/progress')).data.summary, adminProgress, 'Withdrawing a historical version must not withdraw the current version');
+  });
+
+  await t.test('renaming unmatched historical records repairs progress without replacing AI results or confirmation', async () => {
+    const taskId = Number(database.prepare(`INSERT INTO outline_requirements
+      (source_key, course_name, course_group, professional, writer_user_id) VALUES (?, ?, ?, ?, ?)`)
+      .run('rename-history', '离散数学', groupA, iot, aliceId).lastInsertRowid);
+    const id = seed(aliceId, '离散数学-24物联网-执笔人-大纲', iot);
+    const url = `/api/submissions/${id}`;
+    assert.equal((await alice(`${url}/confirm`, {})).status, 200);
+    const before = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
+    assert.equal((await alice(url, { course_name: '离散数学' }, 'PUT')).status, 403);
+    assert.equal((await leader(url, { course_name: '离散数学' }, 'PUT')).status, 403);
+    assert.equal((await head(url, { course_name: '离散数学' }, 'PUT')).status, 403);
+    assert.equal((await admin(url, { course_name: '   ' }, 'PUT')).status, 400);
+    const edited = await tang(url, { course_name: '离散数学' }, 'PUT');
+    assert.equal(edited.status, 200);
+    assert.equal(edited.data.outlineRequirementId, taskId);
+    const after = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
+    for (const key of ['file_path', 'file_name', 'extracted_text', 'result_json', 'verdict', 'confirmed_at', 'confirmed_by', 'finished_at', 'seq']) {
+      assert.deepEqual(after[key], before[key], key);
+    }
+    assert.equal(JSON.parse(after.course_snapshot).name, '离散数学');
+    assert.equal(database.prepare('SELECT name FROM courses WHERE id = ?').get(after.course_id).name, '离散数学');
+    const progress = (await alice('/api/progress')).data.courses.find((row) => row.id === taskId);
+    assert.equal(progress.latest_id, id);
+    assert.equal(progress.verdict, 'passed');
+    assert.equal(progress.confirmed_at, before.confirmed_at);
+    assert.match((await admin(`${url}/report.txt`)).data.text, /离散数学/);
+
+    assert.equal((await admin(url, { course_name: '修订后的显示名称' }, 'PUT')).data.outlineRequirementId, taskId, 'Existing explicit task bindings stay unchanged');
+    assert.equal((await alice('/api/progress')).data.courses.find((row) => row.id === taskId).latest_id, id);
+    const unmatchedId = seed(aliceId, '待修订名称', iot);
+    assert.equal((await admin(`/api/submissions/${unmatchedId}`, { course_name: '未列入清单的课程' }, 'PUT')).data.outlineRequirementId, null);
+    for (const group of [groupA, groupB]) {
+      database.prepare(`INSERT INTO outline_requirements
+        (source_key, course_name, course_group, professional) VALUES (?, ?, ?, ?)`)
+        .run(`rename-ambiguous-${group}`, '同名修订课程', group, iot);
+    }
+    assert.equal((await admin(`/api/submissions/${unmatchedId}`, { course_name: '同名修订课程' }, 'PUT')).data.outlineRequirementId, null, 'Ambiguous tasks are never guessed');
+    assert.ok((await admin('/api/supervision-management')).data.requirements.filter((row) => row.course_name === '同名修订课程').every((row) => row.latest_id === null));
+    const ownTask = database.prepare("SELECT id FROM outline_requirements WHERE source_key = ?").get(`rename-ambiguous-${groupA}`).id;
+    database.prepare('UPDATE outline_requirements SET writer_user_id = ? WHERE id = ?').run(aliceId, ownTask);
+    assert.equal((await admin(`/api/submissions/${unmatchedId}`, { course_name: '同名修订课程' }, 'PUT')).data.outlineRequirementId, ownTask, 'Matching uses the uploader, not the administrator editing the record');
+    database.prepare("UPDATE submissions SET status = 'running' WHERE id = ?").run(unmatchedId);
+    assert.equal((await admin(`/api/submissions/${unmatchedId}`, { course_name: '离散数学' }, 'PUT')).status, 409);
+    const publicTask = Number(database.prepare(`INSERT INTO outline_requirements
+      (source_key, course_name, course_group, professional) VALUES (?, ?, ?, ?)`)
+      .run('rename-public', '大学计算机', groupA, '计算机公共教学').lastInsertRowid);
+    const publicId = seed(aliceId, '公共课程旧名称', '公共');
+    database.prepare("UPDATE submissions SET course_snapshot = json_set(course_snapshot, '$.publicPlanMatch', json(?)) WHERE id = ?")
+      .run(JSON.stringify({ matches: [{ major: '旧适用专业', evidence: '旧依据' }], unresolved: [] }), publicId);
+    assert.equal((await admin(`/api/submissions/${publicId}`, { course_name: '大学计算机' }, 'PUT')).data.outlineRequirementId, publicTask);
+    const publicSnapshot = JSON.parse(database.prepare('SELECT course_snapshot FROM submissions WHERE id = ?').get(publicId).course_snapshot);
+    assert.equal(publicSnapshot.major, '公共');
+    assert.equal(publicSnapshot.publicPlanMatch, undefined, 'Editing course identity clears stale public-plan positioning');
   });
 });

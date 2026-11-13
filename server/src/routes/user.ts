@@ -221,8 +221,9 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
 
     const requirements = db.prepare(`SELECT id, writer_user_id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
       AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
-        OR (? = '计算机科学与技术（专转本）' AND professional = '专转本'))`)
-      .all(body.name, body.major, body.major, body.major) as { id: number; writer_user_id: number | null }[];
+        OR (? = '计算机科学与技术（专转本）' AND professional = '专转本')
+        OR (? = '公共' AND professional = '计算机公共教学'))`)
+      .all(body.name, body.major, body.major, body.major, body.major) as { id: number; writer_user_id: number | null }[];
     const ownRequirements = requirements.filter((r) => r.writer_user_id === req.user!.id);
     const matchingRequirements = ownRequirements.length ? ownRequirements : requirements;
     // 云清单只用于关联进度，匹配不明确或选择已失效时也允许上传。
@@ -283,6 +284,7 @@ type SubFull = {
   withdrawn_at: string | null;
   verdict_edited_at: string | null;
   verdict_edited_by: string;
+  outline_requirement_id: number | null;
 };
 
 function getOwnSub(req: Request, res: Response, id = Number(req.params.id)): SubFull | null {
@@ -400,16 +402,29 @@ userRouter.put('/submissions/:id', (req, res) => {
     major: body.major ?? previousCourse.major,
     studentGrade: body.student_grade ?? previousCourse.studentGrade,
   };
+  if (body.course_name !== undefined || body.major !== undefined) delete course.publicPlanMatch;
   if (body.major !== undefined) {
     if (body.major === '计算机科学与技术（专转本）') course.trainingType = '专转本';
     else if (previousCourse.major === '计算机科学与技术（专转本）') course.trainingType = '普通本科';
   }
   const fileName = body.file_name ?? before.file_name;
   const verdict = body.verdict ?? before.verdict;
+  let requirementId = before.outline_requirement_id;
   db.transaction(() => {
     if (body.course_name !== undefined || body.major !== undefined || body.student_grade !== undefined) {
       db.prepare("UPDATE courses SET name = COALESCE(?, name), major = COALESCE(?, major), student_grade = COALESCE(?, student_grade), training_type = COALESCE(?, training_type), updated_at = datetime('now','localtime') WHERE id = ?")
         .run(body.course_name, body.major, body.student_grade, body.major !== undefined ? course.trainingType : undefined, before.course_id);
+    }
+    if (requirementId === null && (body.course_name !== undefined || body.major !== undefined)) {
+      const requirements = db.prepare(`SELECT id, writer_user_id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
+        AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
+          OR (? = '计算机科学与技术（专转本）' AND professional = '专转本')
+          OR (? = '公共' AND professional = '计算机公共教学'))`)
+        .all(course.name, course.major, course.major, course.major, course.major) as { id: number; writer_user_id: number | null }[];
+      const ownRequirements = requirements.filter((row) => row.writer_user_id === before.user_id);
+      const matchingRequirements = ownRequirements.length ? ownRequirements : requirements;
+      requirementId = matchingRequirements.length === 1 ? matchingRequirements[0].id : null;
+      db.prepare('UPDATE submissions SET outline_requirement_id = ? WHERE id = ?').run(requirementId, id);
     }
     db.prepare('UPDATE submissions SET course_snapshot = ?, file_name = ?, verdict = ? WHERE id = ?')
       .run(JSON.stringify(course), fileName, verdict, id);
@@ -422,11 +437,11 @@ userRouter.put('/submissions/:id', (req, res) => {
         .run(`${req.user!.name}（${req.user!.username}）`, id);
     }
     audit(req.user, '修改上传记录', `记录#${id}`, JSON.stringify({
-      before: { course: previousCourse, file_name: before.file_name, verdict: before.verdict },
-      after: { course, file_name: fileName, verdict },
+      before: { course: previousCourse, file_name: before.file_name, verdict: before.verdict, outline_requirement_id: before.outline_requirement_id },
+      after: { course, file_name: fileName, verdict, outline_requirement_id: requirementId },
     }), req.ip);
   })();
-  res.json({ ok: true });
+  res.json({ ok: true, outlineRequirementId: requirementId });
 });
 
 userRouter.put('/submissions/:id/sequence', (req, res) => {

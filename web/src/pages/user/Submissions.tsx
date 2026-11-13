@@ -12,6 +12,7 @@ import EditableText from '../../components/EditableText';
 import type { SubmissionRow } from '../../types';
 import SubmissionAttachments from '../../components/SubmissionAttachments';
 import SubmissionFilters from '../../components/SubmissionFilters';
+import SubmissionCourseEditor from '../../components/SubmissionCourseEditor';
 import { AI_RESULT_NOTICE } from '../../checkNotices';
 
 interface Row extends SubmissionRow { username: string; user_name: string }
@@ -126,7 +127,7 @@ export default function Submissions() {
           columns={[
             { title: '课程', dataIndex: 'course_name', render: (name, row) => editField(row, 'course_name', name, canEditRecords && row.status !== 'queued' && row.status !== 'running' ? <span style={{ color: '#1f4e8c' }}>{name}</span> : <Link to={`/submissions/${row.id}`}>{name}</Link>) },
             { title: '年级', dataIndex: 'student_grade', width: 80, render: (grade, row) => editField(row, 'student_grade', String(grade), `${String(grade).slice(-2)}级`, [2023, 2024, 2025, 2026].map((n) => ({ value: String(n), label: `${String(n).slice(-2)}级` }))) },
-            { title: '专业', dataIndex: 'major', width: 180, render: (major, row) => editField(row, 'major', major, major, ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能'].map((name) => ({ value: name, label: name }))) },
+            { title: '专业', dataIndex: 'major', width: 180, render: (major, row) => editField(row, 'major', major, major, ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能', '公共'].map((name) => ({ value: name, label: name }))) },
             ...(scope === 'college' ? [{ title: '上传人', width: 150, render: (_: unknown, row: Row) => <div>{row.user_name}<div className="muted small">{row.username}</div></div> }] : []),
             { title: '次数', dataIndex: 'seq', width: 75, render: (seq, row) => <EditableNumber name={`上传次数-${row.id}`} value={seq} min={1} editable={canEditRecords} format={(n) => `第${n}次`} onSave={async (next) => { await api.put(`/api/submissions/${row.id}/sequence`, { seq: next }); await load(); }} /> },
             { title: '文件', dataIndex: 'file_name', width: 210, ellipsis: true, render: (name, row) => editField(row, 'file_name', name, <Tooltip title={name}>{name} <span className="muted small">{fmtSize(row.file_size)}</span></Tooltip>) },
@@ -146,10 +147,11 @@ export default function Submissions() {
             { title: '提交状态', width: 165, render: (_, row) => <><ConfirmationTag confirmedAt={row.confirmed_at} status={row.status} withdrawnAt={row.withdrawn_at} />{row.confirmed_at && <div className="muted small">{row.confirmed_at}</div>}</> },
             { title: '文件上传时间', dataIndex: 'created_at', width: 170 },
             {
-              title: '操作', width: 220,
+              title: '操作', width: 280,
               render: (_, row) => (
-                <Space size={0}>
+                <Space size={0} wrap>
                   <Link to={`/submissions/${row.id}`}><Button type="link" size="small">{scope === 'mine' && row.status === 'done' && !row.confirmed_at ? '查看并提交' : '查看详情'}</Button></Link>
+                  <SubmissionCourseEditor id={row.id} name={row.course_name} status={row.status} onSaved={load} />
                   {scope === 'mine' && row.confirmed_at && <Popconfirm title="撤回上传？" description="本条记录恢复为未上传；若为课程最新结果，应交进度同步恢复未上传。原文件和检查结果保留，可再次确认提交。" okText="撤回上传" onConfirm={() => withdraw(row.id)} okButtonProps={{ loading: withdrawing === row.id }}>
                     <Button type="link" size="small" danger disabled={withdrawing !== null} loading={withdrawing === row.id}>撤回上传</Button>
                   </Popconfirm>}

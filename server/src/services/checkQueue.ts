@@ -5,6 +5,7 @@ import { buildUserPrompt } from './ai/prompt.js';
 import { computeVerdict, extractJson, normalizeResult, ResultFormatError } from './ai/schema.js';
 import { loadChecklist } from './checklist.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from './checkQuota.js';
+import { parsePublicPlanMatch, publicPlanMatchPrompt, splitPublicPlan, type PublicPlanMatch } from './publicPlan.js';
 
 export interface CourseSnapshot {
   name: string;
@@ -13,6 +14,7 @@ export interface CourseSnapshot {
   studentGrade: number;
   planGrade: number;
   adjustNote: string;
+  publicPlanMatch?: PublicPlanMatch;
 }
 
 interface SubRow {
@@ -90,16 +92,32 @@ async function runCheck(id: number) {
         | { name: string; extracted_text: string }
         | undefined)
     : undefined;
+  const settings = getSettings('ai');
+  let comparisonPlan = plan ? { name: plan.name, text: plan.extracted_text } : null;
+  if (course.major === '公共' && plan) {
+    const sections = splitPublicPlan(plan.extracted_text);
+    if (!sections.length) throw new Error('公共培养方案中未识别到专业章节，请管理员核对方案文本');
+    const majors = sections.map((section) => section.major);
+    const matched = await callAi(publicPlanMatchPrompt(majors, course.name, sub.extracted_text), {
+      settings, structured: false, system: '你是公共课程适用专业定位助手。只依据大纲原文定位专业，返回指定 JSON，不做大纲检查。',
+    });
+    if (matched.truncated) throw new Error('公共课程专业定位输出被截断，请调大最大输出 token 后重试');
+    course.publicPlanMatch = parsePublicPlanMatch(matched.text, majors, sub.extracted_text);
+    const selected = sections.filter((section) => course.publicPlanMatch!.matches.some((match) => match.major === section.major));
+    comparisonPlan = selected.length ? {
+      name: `${plan.name}（适用专业：${selected.map((section) => section.major).join('、')}）`,
+      text: selected.map((section) => `## ${section.major}专业方案\n${section.text}`).join('\n\n'),
+    } : null;
+  }
 
   // 每次检查只使用本次上传的大纲，不带入任何历史提交
   const user = buildUserPrompt({
     checklist,
     course,
-    plan: plan ? { name: plan.name, text: plan.extracted_text } : null,
+    plan: comparisonPlan,
     syllabus: { fileName: sub.file_name, text: sub.extracted_text },
   });
   const codes = checklist.items.map((i) => i.code);
-  const settings = getSettings('ai');
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -107,9 +125,12 @@ async function runCheck(id: number) {
     try {
       if (r.truncated) throw new ResultFormatError('AI 输出被截断，请在 AI 配置中调大“最大输出 token”');
       const result = normalizeResult(extractJson(r.text), codes, attempt === 0);
+      if (course.publicPlanMatch) {
+        result.toVerify.push(...course.publicPlanMatch.unresolved.map((content) => ({ itemCodes: [], location: '公共课程适用专业', content })));
+      }
       db.prepare(
-        "UPDATE submissions SET status = 'done', verdict = ?, result_json = ?, ai_model = ?, error = NULL, finished_at = datetime('now','localtime') WHERE id = ?",
-      ).run(computeVerdict(result), JSON.stringify(result), r.model, id);
+        "UPDATE submissions SET status = 'done', verdict = ?, result_json = ?, ai_model = ?, course_snapshot = ?, error = NULL, finished_at = datetime('now','localtime') WHERE id = ?",
+      ).run(computeVerdict(result), JSON.stringify(result), r.model, JSON.stringify(course), id);
       return;
     } catch (e) {
       lastErr = e;

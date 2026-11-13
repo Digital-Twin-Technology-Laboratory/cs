@@ -24,6 +24,7 @@ import { COLLEGE_PRESETS, GROUP_PRESETS } from '../services/supervisionRoles.js'
 import { passwordSchema } from './auth.js';
 import { COURSE_LIST_SQL } from './user.js';
 import { identifyPlanMajor } from '../services/planIdentification.js';
+import { splitPublicPlan } from '../services/publicPlan.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -594,6 +595,7 @@ adminRouter.post('/plans', singleUpload(['.docx', '.pdf', '.txt', '.md']), async
     if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
     const name = body.name || `${body.grade}级${body.major}（${body.trainingType}）人才培养方案`;
     const text = await extractFile(file.path, file.originalname);
+    if (body.major === '公共' && !splitPublicPlan(text).length) return res.status(400).json({ error: '公共方案未识别到专业章节，请上传含“专业名称 专业人才培养方案（年级）”标题的全校合订本' });
     const rel = storeFile(file.path, 'plans', file.originalname);
     const r = db
       .prepare('INSERT INTO training_plans (major, training_type, grade, name, file_name, file_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -613,6 +615,7 @@ adminRouter.put('/plans/:id', (req, res) => {
   const p = db.prepare('SELECT * FROM training_plans WHERE id = ?').get(id) as { name: string } | undefined;
   if (!p) return res.status(404).json({ error: '培养方案不存在' });
   const body = planFields.extend({ extractedText: z.string().min(1, '方案文本不能为空'), enabled: z.boolean() }).parse(req.body);
+  if (body.major === '公共' && !splitPublicPlan(body.extractedText).length) return res.status(400).json({ error: '公共方案需保留各专业的“专业名称 专业人才培养方案（年级）”标题，以便定位章节' });
   if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
   db.prepare(
     "UPDATE training_plans SET major=?, training_type=?, grade=?, name=?, extracted_text=?, enabled=?, updated_at=datetime('now','localtime') WHERE id=?",

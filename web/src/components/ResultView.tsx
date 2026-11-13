@@ -30,6 +30,10 @@ export function SubmissionMeta({ sub }: { sub: SubmissionDetail }) {
     <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }} bordered>
       <Descriptions.Item label="课程名称">{c.name}</Descriptions.Item>
       <Descriptions.Item label="专业">{c.major}</Descriptions.Item>
+      {c.publicPlanMatch && <Descriptions.Item label="适用专业（AI 定位）" span={3}>
+        {c.publicPlanMatch.matches.map((match) => <div key={match.major}><b>{match.major}</b>；依据：{match.evidence}</div>)}
+        {c.publicPlanMatch.unresolved.map((content, index) => <div key={index} className="muted">需核实：{content}</div>)}
+      </Descriptions.Item>}
       <Descriptions.Item label="培养类型">{c.trainingType}</Descriptions.Item>
       <Descriptions.Item label="学生年级">{c.studentGrade}级</Descriptions.Item>
       <Descriptions.Item label="对照方案" span={2}>
@@ -73,6 +77,10 @@ export default function ResultView({ sub, items, sections }: Props) {
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <Alert className="no-print" type="info" showIcon title="AI 检查结果使用提示" description={AI_RESULT_NOTICE} />
+      {sub.course.publicPlanMatch && <Alert type={sub.course.publicPlanMatch.unresolved.length ? 'warning' : 'info'} showIcon
+        title={`公共课程适用专业：${sub.course.publicPlanMatch.matches.map((match) => match.major).join('、') || '尚未确定'}`}
+        description={<>{sub.course.publicPlanMatch.matches.map((match) => <div key={match.major}>{match.major}；大纲依据：{match.evidence}</div>)}
+          {sub.course.publicPlanMatch.unresolved.map((content, index) => <div key={index}>需核实：{content}</div>)}</>} />}
       <Card className="result-download no-print">
         <div className="result-download-head">
           <div>

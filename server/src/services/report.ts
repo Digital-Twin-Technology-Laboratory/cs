@@ -34,6 +34,10 @@ function split(r: CheckResult) {
 export function reportText(r: ReportInput): string {
   const { major, suggest } = split(r.result);
   const lines = [reportTitle(r), '', `使用提示：${AI_RESULT_NOTICE}`, '', reportScope(r), reportMeta(r)];
+  if (r.course.publicPlanMatch) {
+    lines.push('公共课程适用专业定位：', ...r.course.publicPlanMatch.matches.map((match) => `${match.major}；依据：${match.evidence}`),
+      ...r.course.publicPlanMatch.unresolved.map((content) => `需核实：${content}`), '');
+  }
   if (r.course.adjustNote) lines.push(`对照方案调整说明：${r.course.adjustNote}`);
   lines.push(`检查结论：${verdictText(r.verdict)}`, '');
   if (r.verdictEdit) lines.push(verdictEditNote(r), '');
@@ -79,6 +83,12 @@ export async function reportDocx(r: ReportInput): Promise<Buffer> {
     new Paragraph({ children: [run(reportMeta(r), false, 20)] }),
   ];
   if (r.course.adjustNote) children.push(field('对照方案调整说明', r.course.adjustNote, 20));
+  if (r.course.publicPlanMatch) {
+    children.push(field('公共课程适用专业定位', [
+      ...r.course.publicPlanMatch.matches.map((match) => `${match.major}；依据：${match.evidence}`),
+      ...r.course.publicPlanMatch.unresolved.map((content) => `需核实：${content}`),
+    ].join('\n'), 20));
+  }
   children.push(field('检查结论', verdictText(r.verdict), 20, 140));
   if (r.verdictEdit) children.push(new Paragraph({ children: [run(verdictEditNote(r), false, 20)] }));
 

@@ -100,7 +100,7 @@ function MatchedPlan({ uid }: { uid: string }) {
   if (!plan) return <span className="small" style={{ color: '#ad6800' }}>未预置{grade}级{major}培养方案；仍可检查，方案比对项需核实。</span>;
   return <div className="small"><div>对应方案：{plan.name}</div>{plan.downloadable
     ? <Button type="link" size="small" icon={<DownloadOutlined />} href={`/api/plans/${plan.id}/file`}>下载对应培养方案</Button>
-    : <span className="muted">方案原文件未上传</span>}</div>;
+    : <span className="muted">方案原文件未上传</span>}{major === '公共' && <div className="muted">AI 将先从大纲中识别适用专业，再核对全校方案中对应专业的章节；无法确定时列为需核实。</div>}</div>;
 }
 
 export default function Upload() {
@@ -315,7 +315,7 @@ export default function Upload() {
               ]}
             />
           )}
-          {files.length > 0 && <p className="muted small">云清单仅用于总览展示和进度统计，不限制上传账号、课程或执笔人。课程下拉只选择课程名称，不自动填写专业；请按实际授课对象手动选择专业。匹配明确时自动关联应交任务，无法明确关联时仍可上传并保留检查记录，不误计入其他任务的进度。系统按每行专业匹配培养方案，未预置方案时仍可检查，方案比对项列为需核实。</p>}
+          {files.length > 0 && <p className="muted small">云清单仅用于总览展示和进度统计，不限制上传账号、课程或执笔人。课程下拉只选择课程名称，不自动填写专业；请按实际授课对象手动选择专业。公共课程请选择“公共”，AI 根据大纲的适用专业定位全校培养方案中相应章节，不会根据课程名称猜测专业。匹配明确时自动关联应交任务，无法明确关联时仍可上传并保留检查记录，不误计入其他任务的进度。系统按每行专业匹配培养方案，未预置方案时仍可检查，方案比对项列为需核实。</p>}
           <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || identifying || checkQuota?.remaining === 0}>
             {identifying ? '正在识别课程名称…' : files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>
