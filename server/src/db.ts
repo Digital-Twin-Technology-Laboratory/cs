@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
-import { SEED_INTRO, SEED_ITEMS, SEED_NAME, SEED_NOTES, SEED_RULES } from './seed/checklist.js';
+import { LEGACY_SEED_NAME, SEED_INTRO, SEED_ITEMS, SEED_NAME, SEED_NOTES, SEED_RULES, SYLLABUS_SCOPE_RULES, type SeedItem } from './seed/checklist.js';
 import { COLLEGE_PRESETS, GROUP_PRESETS } from './services/supervisionRoles.js';
 
 const raw = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
@@ -302,18 +302,27 @@ if (!db.prepare("SELECT 1 FROM settings WHERE key = 'submission_sequences_initia
   })();
 }
 
-/** 首次启动写入初始检查清单 */
+/** 首次写入默认清单；升级旧默认清单时另存版本，保留历史检查依据。 */
 function seedChecklist() {
   const n = db.prepare('SELECT COUNT(*) AS n FROM checklist_versions').get() as { n: number };
-  if (n.n > 0) return;
+  const legacy = db.prepare('SELECT id, notes, rules FROM checklist_versions WHERE name = ? AND is_active = 1 ORDER BY id DESC LIMIT 1')
+    .get(LEGACY_SEED_NAME) as { id: number; notes: string; rules: string } | undefined;
+  if (n.n > 0 && !legacy) return;
+  const changedCodes = new Set(['C06', 'C07', 'C08', 'C09', 'C10', 'C11']);
+  const items = legacy
+    ? (db.prepare('SELECT code, section, title, content FROM checklist_items WHERE version_id = ? ORDER BY sort, id').all(legacy.id) as SeedItem[])
+      .map((item) => changedCodes.has(item.code) ? SEED_ITEMS.find((replacement) => replacement.code === item.code)! : item)
+    : SEED_ITEMS;
   const tx = db.transaction(() => {
+    if (legacy) db.prepare('UPDATE checklist_versions SET is_active = 0 WHERE id = ?').run(legacy.id);
     const r = db
       .prepare('INSERT INTO checklist_versions (name, intro, notes, rules, is_active) VALUES (?, ?, ?, ?, 1)')
-      .run(SEED_NAME, SEED_INTRO, JSON.stringify(SEED_NOTES), SEED_RULES);
+      .run(SEED_NAME, SEED_INTRO, legacy?.notes ?? JSON.stringify(SEED_NOTES),
+        legacy ? `${legacy.rules.replace(/^- 材料不足：.*(?:\r?\n|$)/m, '')}\n${SYLLABUS_SCOPE_RULES}` : SEED_RULES);
     const ins = db.prepare(
       'INSERT INTO checklist_items (version_id, code, section, title, content, sort) VALUES (?, ?, ?, ?, ?, ?)',
     );
-    SEED_ITEMS.forEach((it, i) => ins.run(r.lastInsertRowid, it.code, it.section, it.title, it.content, i));
+    items.forEach((it, i) => ins.run(r.lastInsertRowid, it.code, it.section, it.title, it.content, i));
   });
   tx();
 }

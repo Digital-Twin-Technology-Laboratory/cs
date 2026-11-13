@@ -5,6 +5,7 @@ import { decrypt } from '../crypto.js';
 import { callOpenAICompatible, describeOpenAIError } from './openai.js';
 import { callAnthropic, describeAnthropicError } from './anthropic.js';
 import { DEFAULT_SYSTEM_PROMPT } from './prompt.js';
+import { SYLLABUS_SCOPE_RULES } from '../../seed/checklist.js';
 
 export interface AiCallOptions {
   apiKey: string;
@@ -37,7 +38,7 @@ export function aiReady(s: AiSettings = getSettings('ai')): string | null {
 }
 
 export function effectiveSystemPrompt(s: AiSettings = getSettings('ai')) {
-  return s.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT;
+  return `${s.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT}\n\n本次检查范围约束（优先于上述旧版跨材料要求）\n${SYLLABUS_SCOPE_RULES}`;
 }
 
 export async function listModels(settings: Pick<AiSettings, 'provider' | 'baseUrl'>, apiKey: string): Promise<string[]> {

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -35,7 +35,7 @@ test('account activation, daily check quota and checklist download', { timeout: 
       return;
     }
     const request = JSON.parse(body);
-    aiRequests.push({ model: request.model, authorization: req.headers.authorization });
+    aiRequests.push({ model: request.model, authorization: req.headers.authorization, messages: request.messages });
     aiCalls++;
     if (hold) await hold;
     res.setHeader('Content-Type', 'application/json');
@@ -317,6 +317,9 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.equal(aiRequests.at(-1).model, 'mock-second');
     assert.equal(aiRequests.at(-1).authorization, 'Bearer second-secret');
     assert.equal((await teacher(`/api/submissions/${uploaded.data.submissionId}`)).data.submission.ai_model, 'mock-second');
+    assert.match(aiRequests.at(-1).messages[0].content, /Updated prompt/);
+    assert.match(aiRequests.at(-1).messages[0].content, /不检查教学进度表/);
+    assert.match(aiRequests.at(-1).messages[1].content, /跨材料条目在 itemResults 中记为“不适用”/);
     assert.equal((await admin(`/api/admin/ai/profiles/${original.id}/activate`, {})).status, 200);
     assert.equal((await admin('/api/admin/ai/test', { ...config, apiKey: '', profileId: original.id })).status, 200);
     assert.equal(aiRequests.at(-1).authorization, 'Bearer test-only');
@@ -330,7 +333,7 @@ test('account activation, daily check quota and checklist download', { timeout: 
     const issue = { nature: '明确问题', itemCodes: ['C01'], title: '考核权重不符', location: '第六部分', problem: '分项合计为90%。', advice: '核对并修正为100%。\n保留成绩依据。', evidence: 'Do not export this quote' };
     database.prepare('UPDATE submissions SET result_json = ? WHERE id = ?').run(JSON.stringify({ summary: 'Result summary', itemResults: [], issues: [issue, { ...issue, nature: '建议修改', title: '细化评价标准' }], toVerify: [{ itemCodes: ['M03'], location: '签字页', content: '请核实归档材料。' }] }), id);
     const text = (await teacher(`/api/submissions/${id}/report.txt`)).data.text;
-    for (const content of ['教学大纲检查结果', '一 明确问题及重大问题', 'A01 考核权重不符', '二 建议修改项', 'B01 细化评价标准', '位置：第六部分', '问题：分项合计为90%', '整改意见：', '附 需核实事项']) assert.ok(text.includes(content), content);
+    for (const content of ['教学大纲检查结果', '一 明确问题及重大问题', 'A01 考核权重不符', '二 建议完善项', 'B01 细化评价标准', '位置：第六部分', '问题：分项合计为90%', '整改意见：', '附 需核实事项', '可能存在遗漏或判断不准确', '自主判断是否采纳意见', '相关材料一致性提醒']) assert.ok(text.includes(content), content);
     assert.doesNotMatch(text, /修改清单|C01|M03|Do not export/);
     const downloaded = await teacher(`/api/submissions/${id}/report.docx`);
     assert.equal(downloaded.status, 200);
@@ -338,11 +341,24 @@ test('account activation, daily check quota and checklist download', { timeout: 
     const extracted = await mammoth.extractRawText({ buffer: downloaded.data });
     assert.match(extracted.value, /A01 考核权重不符/);
     assert.match(extracted.value, /B01 细化评价标准/);
+    assert.ok(extracted.value.indexOf('可能存在遗漏或判断不准确') < extracted.value.indexOf('检查对象：'));
+    assert.ok(extracted.value.indexOf('相关材料一致性提醒') > extracted.value.indexOf('二 建议完善项'));
     const converted = await mammoth.convertToHtml({ buffer: downloaded.data });
     assert.doesNotMatch(converted.value, /<table/);
     assert.match(converted.value, /<h1>一 明确问题及重大问题<\/h1>/);
     assert.match(converted.value, /<h2>A01 考核权重不符<\/h2>/);
     assert.equal((await client()(`/api/submissions/${id}/report.docx`)).status, 401);
+  });
+
+  await t.test('teachers can download the original syllabus template; login is required', async () => {
+    const url = '/api/syllabus-template.docx';
+    assert.equal((await client()(url)).status, 401);
+    const response = await teacher(url);
+    assert.equal(response.status, 200);
+    assert.match(decodeURIComponent(response.headers.get('content-disposition')), /教学大纲模板\.docx/);
+    assert.deepEqual(response.data, readFileSync(path.join(root, 'server/assets/syllabus-template.docx')));
+    const extracted = (await mammoth.extractRawText({ buffer: response.data })).value;
+    for (const type of ['课程教学大纲', '课程设计', '实习/实训/社会实践', '毕业论文（设计）']) assert.ok(extracted.includes(type), type);
   });
 
   await t.test('upload sequences follow course identity instead of a newly created course ID', async () => {

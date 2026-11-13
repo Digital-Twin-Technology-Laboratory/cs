@@ -4,6 +4,7 @@ import { CopyOutlined, DownloadOutlined, FileWordOutlined, PrinterOutlined } fro
 import { api, download } from '../api';
 import type { CheckResult, ChecklistItem, SectionMeta, SubmissionDetail } from '../types';
 import { ItemResultTag, NatureTag, SubmissionTag } from './StatusTag';
+import { AI_RESULT_NOTICE, MATERIALS_REMINDER } from '../checkNotices';
 
 interface Props {
   sub: SubmissionDetail;
@@ -71,6 +72,7 @@ export default function ResultView({ sub, items, sections }: Props) {
 
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+      <Alert className="no-print" type="info" showIcon title="AI 检查结果使用提示" description={AI_RESULT_NOTICE} />
       <Card className="result-download no-print">
         <div className="result-download-head">
           <div>
@@ -114,6 +116,7 @@ export default function ResultView({ sub, items, sections }: Props) {
 
       <Card className="report-paper">
         <h2 className="report-title">《{sub.course.name}》教学大纲检查结果</h2>
+        <p><b>使用提示：</b>{AI_RESULT_NOTICE}</p>
         <p className="report-scope">检查对象：{sub.course.studentGrade}级《{sub.course.name}》教学大纲。对照方案：{sub.plan_name || `${sub.course.planGrade}级${sub.course.major}（${sub.course.trainingType}）人才培养方案（未预置，相关内容需核实）`}。</p>
         <p className="report-meta">专业：{sub.course.major}　培养类型：{sub.course.trainingType}　检查次数：第{sub.seq}次　检查时间：{sub.finished_at}</p>
         {sub.course.adjustNote && <p className="report-meta">对照方案调整说明：{sub.course.adjustNote}</p>}
@@ -122,8 +125,9 @@ export default function ResultView({ sub, items, sections }: Props) {
         <h3 className="report-section">一 明确问题及重大问题</h3>
         {major.length ? major.map((i, n) => <IssueCard key={n} n={n + 1} label="A" issue={i} />) : <p>无。</p>}
 
-        <h3 className="report-section">二 建议修改项</h3>
-        {suggest.length ? suggest.map((i, n) => <IssueCard key={n} n={n + 1} label="B" issue={i} />) : <p>无。</p>}
+        <h3 className="report-section">二 建议完善项</h3>
+        <p><b>相关材料一致性提醒：</b>{MATERIALS_REMINDER}</p>
+        {suggest.length ? suggest.map((i, n) => <IssueCard key={n} n={n + 1} label="B" issue={i} />) : <p>无其他建议修改项。</p>}
 
         {r.toVerify.length > 0 && (
           <>

@@ -1,6 +1,9 @@
 import { AlignmentType, Document, HeadingLevel, LineRuleType, Packer, Paragraph, TextRun } from 'docx';
 import type { CheckResult } from './ai/schema.js';
 import type { CourseSnapshot } from './checkQueue.js';
+import { MATERIALS_REMINDER } from '../seed/checklist.js';
+
+export const AI_RESULT_NOTICE = '本检查结果由 AI 生成，仅供辅助教师修改教学大纲，可能存在遗漏或判断不准确。请结合课程实际情况，自主判断是否采纳意见及采用何种修改方式，完成必要修改并核对无误后，在结果页点击“确认提交”完成上传。';
 
 export interface ReportInput {
   course: CourseSnapshot;
@@ -18,7 +21,7 @@ const issueNumber = (prefix: string, n: number) => `${prefix}${String(n + 1).pad
 const reportTitle = (r: ReportInput) => `《${r.course.name}》教学大纲检查结果`;
 const reportScope = (r: ReportInput) => `检查对象：${r.course.studentGrade}级《${r.course.name}》教学大纲。对照方案：${planLabel(r)}。`;
 const reportMeta = (r: ReportInput) => `专业：${r.course.major}　培养类型：${r.course.trainingType}　检查次数：第${r.seq}次　检查时间：${r.checkedAt}`;
-const REPORT_NOTE = '注：本结果由 AI 依据教学大纲检查清单生成，供修改参考；问题编号仅用于识别和引用，不代表整改顺序。';
+const REPORT_NOTE = '注：问题编号仅用于识别和引用，不代表整改顺序。';
 const verdictEditNote = (r: ReportInput) => r.verdictEdit ? `检查结论由${r.verdictEdit.by}于${r.verdictEdit.at}手工修改；以下保留原 AI 检查意见。` : '';
 
 function split(r: CheckResult) {
@@ -30,16 +33,17 @@ function split(r: CheckResult) {
 
 export function reportText(r: ReportInput): string {
   const { major, suggest } = split(r.result);
-  const lines = [reportTitle(r), '', reportScope(r), reportMeta(r)];
+  const lines = [reportTitle(r), '', `使用提示：${AI_RESULT_NOTICE}`, '', reportScope(r), reportMeta(r)];
   if (r.course.adjustNote) lines.push(`对照方案调整说明：${r.course.adjustNote}`);
   lines.push(`检查结论：${verdictText(r.verdict)}`, '');
   if (r.verdictEdit) lines.push(verdictEditNote(r), '');
   for (const [title, prefix, issues] of [
     ['一 明确问题及重大问题', 'A', major],
-    ['二 建议修改项', 'B', suggest],
+    ['二 建议完善项', 'B', suggest],
   ] as const) {
     lines.push(title);
-    if (!issues.length) lines.push('无。', '');
+    if (prefix === 'B') lines.push(`相关材料一致性提醒：${MATERIALS_REMINDER}`, '');
+    if (!issues.length) lines.push(prefix === 'B' ? '无其他建议修改项。' : '无。', '');
     issues.forEach((issue, n) => lines.push(
       `${issueNumber(prefix, n)} ${issue.title}`,
       `位置：${issue.location}`,
@@ -70,6 +74,7 @@ export async function reportDocx(r: ReportInput): Promise<Buffer> {
   const { major, suggest } = split(r.result);
   const children: Paragraph[] = [
     new Paragraph({ text: reportTitle(r), heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
+    new Paragraph({ children: [run(`使用提示：${AI_RESULT_NOTICE}`, false, 20)], spacing: { after: 140, line: 280 } }),
     new Paragraph({ children: [run(reportScope(r), false, 20)], spacing: { after: 80, line: 280 } }),
     new Paragraph({ children: [run(reportMeta(r), false, 20)] }),
   ];
@@ -79,10 +84,11 @@ export async function reportDocx(r: ReportInput): Promise<Buffer> {
 
   for (const [title, prefix, issues] of [
     ['一 明确问题及重大问题', 'A', major],
-    ['二 建议修改项', 'B', suggest],
+    ['二 建议完善项', 'B', suggest],
   ] as const) {
     children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1 }));
-    if (!issues.length) children.push(new Paragraph({ children: [run('无。')] }));
+    if (prefix === 'B') children.push(field('相关材料一致性提醒', MATERIALS_REMINDER));
+    if (!issues.length) children.push(new Paragraph({ children: [run(prefix === 'B' ? '无其他建议修改项。' : '无。')] }));
     issues.forEach((issue, n) => children.push(
       new Paragraph({ text: `${issueNumber(prefix, n)} ${issue.title}`, heading: HeadingLevel.HEADING_2 }),
       field('位置', issue.location, 20),

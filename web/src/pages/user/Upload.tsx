@@ -190,10 +190,14 @@ export default function Upload() {
         </div>
         <Link to="/submissions"><Button>查看上传记录</Button></Link>
       </div>
-      <Card title="上传前自查" extra={<Button icon={<DownloadOutlined />} href="/api/checklist.docx" disabled={!options?.checklist}>下载检查清单</Button>} style={{ marginBottom: 16 }}>
+      <Card title="上传前自查" style={{ marginBottom: 16 }}>
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Button icon={<DownloadOutlined />} href="/api/syllabus-template.docx">下载教学大纲模板</Button>
+          <Button icon={<DownloadOutlined />} href="/api/checklist.docx" disabled={!options?.checklist}>下载检查清单</Button>
+        </Space>
         <div className="prose">
           请先核对课程信息、课程目标与毕业要求的对应关系，以及教学内容、学时和考核比例是否一致。<br />
-          同时自查课程支撑矩阵、实验安排、评分标准及审核材料；完整要求请下载清单，逐项自查后再上传。
+          同时自查大纲中的课程支撑矩阵、实验安排、评分标准及审核信息；可下载教学大纲模板，完整要求请下载清单，逐项自查后再上传。
         </div>
         {options && !options.checklist && <div className="muted small">管理员尚未设置生效的检查清单，请联系管理员。</div>}
       </Card>

@@ -1,4 +1,4 @@
-import { App, Button, Card, DatePicker, Empty, Input, Popconfirm, Select, Space, Tooltip } from 'antd';
+import { Alert, App, Button, Card, DatePicker, Empty, Input, Popconfirm, Select, Space, Tooltip } from 'antd';
 import Table from '../../components/ResponsiveTable';
 import { FileWordOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
@@ -12,6 +12,7 @@ import EditableText from '../../components/EditableText';
 import type { SubmissionRow } from '../../types';
 import SubmissionAttachments from '../../components/SubmissionAttachments';
 import SubmissionFilters from '../../components/SubmissionFilters';
+import { AI_RESULT_NOTICE } from '../../checkNotices';
 
 interface Row extends SubmissionRow { username: string; user_name: string }
 
@@ -76,6 +77,7 @@ export default function Submissions() {
         </div>
         <Link to="/upload"><Button type="primary" icon={<UploadOutlined />}>上传检查</Button></Link>
       </div>
+      <Alert type="info" showIcon title="AI 检查结果使用提示" description={AI_RESULT_NOTICE} style={{ marginBottom: 16 }} />
       <Card>
         <Space wrap style={{ marginBottom: 16 }}>
           {canViewCollege && <Select aria-label="检查记录范围" value={scope} style={{ width: 170 }}

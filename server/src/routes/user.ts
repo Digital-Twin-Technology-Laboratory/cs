@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import fs from 'node:fs';
+import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import JSZip from 'jszip';
 import { z } from 'zod';
@@ -19,6 +20,7 @@ import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 import { getOutlineRows, groupOutlinePeople, matchesOutline, supervisesOutlineSubmission } from '../services/outlineProgress.js';
 import { PLAN_MAJORS as majors } from '../services/planIdentification.js';
 import { identifyCourse } from '../services/courseIdentification.js';
+import { ROOT_DIR } from '../config.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
@@ -50,6 +52,10 @@ export const courseSchema = z.object({
 userRouter.get('/checklist', (_req, res) => {
   const c = loadChecklist();
   res.json({ checklist: c, sections: SECTION_META });
+});
+
+userRouter.get('/syllabus-template.docx', (_req, res) => {
+  res.download(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'), '教学大纲模板.docx');
 });
 
 userRouter.get('/checklist.docx', async (_req, res) => {
