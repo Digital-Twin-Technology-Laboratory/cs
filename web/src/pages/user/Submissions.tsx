@@ -15,7 +15,7 @@ import SubmissionFilters from '../../components/SubmissionFilters';
 import SubmissionCourseEditor from '../../components/SubmissionCourseEditor';
 import { AI_RESULT_NOTICE } from '../../checkNotices';
 
-interface Row extends SubmissionRow { username: string; user_name: string }
+interface Row extends SubmissionRow { user_id: number; username: string; user_name: string }
 
 export default function Submissions() {
   const { message } = App.useApp();
@@ -151,7 +151,7 @@ export default function Submissions() {
               render: (_, row) => (
                 <Space size={0} wrap>
                   <Link to={`/submissions/${row.id}`}><Button type="link" size="small">{scope === 'mine' && row.status === 'done' && !row.confirmed_at ? '查看并提交' : '查看详情'}</Button></Link>
-                  <SubmissionCourseEditor id={row.id} name={row.course_name} status={row.status} onSaved={load} />
+                  <SubmissionCourseEditor id={row.id} ownerId={row.user_id} name={row.course_name} status={row.status} onSaved={load} />
                   {scope === 'mine' && row.confirmed_at && <Popconfirm title="撤回上传？" description="本条记录恢复为未上传；若为课程最新结果，应交进度同步恢复未上传。原文件和检查结果保留，可再次确认提交。" okText="撤回上传" onConfirm={() => withdraw(row.id)} okButtonProps={{ loading: withdrawing === row.id }}>
                     <Button type="link" size="small" danger disabled={withdrawing !== null} loading={withdrawing === row.id}>撤回上传</Button>
                   </Popconfirm>}

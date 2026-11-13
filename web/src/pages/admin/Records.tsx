@@ -151,7 +151,7 @@ function SubmissionsTab({ userId, initialStatus }: { userId?: string; initialSta
             fixed: 'right',
             render: (_, r) => (
               <Space size={0} wrap>
-                <SubmissionCourseEditor id={r.id} name={r.course_name} status={r.status} onSaved={load} />
+                <SubmissionCourseEditor id={r.id} ownerId={r.user_id} name={r.course_name} status={r.status} onSaved={load} />
                 <Button type="link" size="small" onClick={() => download(`/api/submissions/${r.id}/file`)}>
                   原文件
                 </Button>

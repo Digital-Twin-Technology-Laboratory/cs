@@ -720,11 +720,18 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     const url = `/api/submissions/${id}`;
     assert.equal((await alice(`${url}/confirm`, {})).status, 200);
     const before = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
-    assert.equal((await alice(url, { course_name: '离散数学' }, 'PUT')).status, 403);
+    assert.equal((await bob(url, { course_name: '离散数学' }, 'PUT')).status, 403);
     assert.equal((await leader(url, { course_name: '离散数学' }, 'PUT')).status, 403);
     assert.equal((await head(url, { course_name: '离散数学' }, 'PUT')).status, 403);
+    for (const patch of [{ major: cs }, { student_grade: 2025 }, { file_name: 'renamed.docx' }, { verdict: 'failed' }]) {
+      assert.equal((await alice(url, patch, 'PUT')).status, 403);
+      assert.equal((await alice(url, { course_name: '不应保存的课程名', ...patch }, 'PUT')).status, 403);
+    }
+    assert.equal((await alice(`${url}/sequence`, { seq: 99 }, 'PUT')).status, 403);
+    assert.deepEqual(database.prepare('SELECT * FROM submissions WHERE id = ?').get(id), before, 'Rejected changes never mutate the record');
+    assert.equal((await alice(url, { course_name: '   ' }, 'PUT')).status, 400);
     assert.equal((await admin(url, { course_name: '   ' }, 'PUT')).status, 400);
-    const edited = await tang(url, { course_name: '离散数学' }, 'PUT');
+    const edited = await alice(url, { course_name: '离散数学' }, 'PUT');
     assert.equal(edited.status, 200);
     assert.equal(edited.data.outlineRequirementId, taskId);
     const after = database.prepare('SELECT * FROM submissions WHERE id = ?').get(id);
@@ -738,6 +745,9 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal(progress.verdict, 'passed');
     assert.equal(progress.confirmed_at, before.confirmed_at);
     assert.match((await admin(`${url}/report.txt`)).data.text, /离散数学/);
+    assert.equal((await alice('/api/submissions')).data.rows.find((row) => row.id === id).user_id, aliceId);
+    assert.equal(database.prepare("SELECT user_id FROM audit_logs WHERE action = '修改上传记录' AND target = ? ORDER BY id DESC LIMIT 1").get(`记录#${id}`).user_id, aliceId);
+    assert.equal((await tang(url, { course_name: '离散数学' }, 'PUT')).status, 200, 'Teaching staff retain their editing permission');
 
     assert.equal((await admin(url, { course_name: '修订后的显示名称' }, 'PUT')).data.outlineRequirementId, taskId, 'Existing explicit task bindings stay unchanged');
     assert.equal((await alice('/api/progress')).data.courses.find((row) => row.id === taskId).latest_id, id);
@@ -755,6 +765,10 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal((await admin(`/api/submissions/${unmatchedId}`, { course_name: '同名修订课程' }, 'PUT')).data.outlineRequirementId, ownTask, 'Matching uses the uploader, not the administrator editing the record');
     database.prepare("UPDATE submissions SET status = 'running' WHERE id = ?").run(unmatchedId);
     assert.equal((await admin(`/api/submissions/${unmatchedId}`, { course_name: '离散数学' }, 'PUT')).status, 409);
+    assert.equal((await alice(`/api/submissions/${unmatchedId}`, { course_name: '离散数学' }, 'PUT')).status, 409);
+    database.prepare("UPDATE submissions SET status = 'queued' WHERE id = ?").run(unmatchedId);
+    assert.equal((await alice(`/api/submissions/${unmatchedId}`, { course_name: '离散数学' }, 'PUT')).status, 409);
+    database.prepare("UPDATE submissions SET status = 'done' WHERE id = ?").run(unmatchedId);
     const publicTask = Number(database.prepare(`INSERT INTO outline_requirements
       (source_key, course_name, course_group, professional) VALUES (?, ?, ?, ?)`)
       .run('rename-public', '大学计算机', groupA, '计算机公共教学').lastInsertRowid);

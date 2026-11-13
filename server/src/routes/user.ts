@@ -336,7 +336,7 @@ userRouter.get('/submissions', (req, res) => {
   const w = where.join(' AND ');
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM submissions s JOIN users u ON u.id = s.user_id WHERE ${w}`).get(...args) as { n: number }).n;
   const rows = db.prepare(
-    `SELECT s.id, s.seq, s.course_id, s.file_name, s.file_size, s.status, s.verdict, s.error,
+    `SELECT s.id, s.seq, s.course_id, s.user_id, s.file_name, s.file_size, s.status, s.verdict, s.error,
       s.created_at, s.finished_at, s.confirmed_at, s.withdrawn_at, u.username, u.name AS user_name,
       json_extract(s.course_snapshot, '$.name') AS course_name,
       json_extract(s.course_snapshot, '$.major') AS major,
@@ -381,8 +381,11 @@ userRouter.post('/submissions/batch-download', async (req, res) => {
 });
 
 userRouter.put('/submissions/:id', (req, res) => {
-  if (req.user!.role !== 'admin' && req.user!.college_role !== 'teaching') return res.status(403).json({ error: '仅管理员或教学条线（全院）可修改上传记录' });
+  const canEditAll = req.user!.role === 'admin' || req.user!.college_role === 'teaching';
   const id = z.coerce.number().int().positive().parse(req.params.id);
+  const before = db.prepare('SELECT * FROM submissions WHERE id = ?').get(id) as SubFull | undefined;
+  if (!before) return res.status(404).json({ error: '记录不存在' });
+  if (!canEditAll && before.user_id !== req.user!.id) return res.status(403).json({ error: '只能修改自己上传记录的课程名称' });
   const body = z.object({
     course_name: courseSchema.shape.name.optional(),
     major: courseSchema.shape.major.optional(),
@@ -390,8 +393,7 @@ userRouter.put('/submissions/:id', (req, res) => {
     file_name: z.string().trim().min(1, '文件名不能为空').max(255).optional(),
     verdict: z.enum(['passed', 'failed']).optional(),
   }).strict().refine((value) => Object.keys(value).length > 0, '请填写要修改的内容').parse(req.body);
-  const before = db.prepare('SELECT * FROM submissions WHERE id = ?').get(id) as SubFull | undefined;
-  if (!before) return res.status(404).json({ error: '记录不存在' });
+  if (!canEditAll && Object.keys(body).some((field) => field !== 'course_name')) return res.status(403).json({ error: '原上传者只能修改课程名称，其他字段需由管理员或教学条线修改' });
   if (before.status === 'queued' || before.status === 'running') return res.status(409).json({ error: '检查进行中，请完成后再修改记录' });
   if (body.verdict !== undefined && (before.status !== 'done' || !before.result_json)) {
     return res.status(400).json({ error: '检查尚未完成，不能修改检查结论' });

@@ -102,7 +102,7 @@ export default function SubmissionDetail() {
             {isOther && `提交人：${s.owner?.name}（${s.owner?.username}）　`}检查清单：{data.checklist?.name ?? '—'}
           </div>
         </div>
-        <SubmissionCourseEditor id={s.id} name={s.course.name} status={s.status} onSaved={load} />
+        <SubmissionCourseEditor id={s.id} ownerId={s.user_id} name={s.course.name} status={s.status} onSaved={load} />
       </div>
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Collapse className="no-print" items={[{ key: 'meta', label: '查看课程与上传信息', children: <SubmissionMeta sub={s} /> }]} />

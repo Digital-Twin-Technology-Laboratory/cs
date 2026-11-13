@@ -5,8 +5,8 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import type { Options, SubStatus } from '../types';
 
-export default function SubmissionCourseEditor({ id, name, status, onSaved }: {
-  id: number; name: string; status: SubStatus; onSaved: () => Promise<unknown>;
+export default function SubmissionCourseEditor({ id, ownerId, name, status, onSaved }: {
+  id: number; ownerId: number; name: string; status: SubStatus; onSaved: () => Promise<unknown>;
 }) {
   const { user } = useAuth();
   const { message } = App.useApp();
@@ -15,7 +15,7 @@ export default function SubmissionCourseEditor({ id, name, status, onSaved }: {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [options, setOptions] = useState<{ value: string }[]>([]);
-  if (user?.role !== 'admin' && user?.college_role !== 'teaching') return null;
+  if (user?.role !== 'admin' && user?.college_role !== 'teaching' && user?.id !== ownerId) return null;
 
   const edit = async () => {
     setLoading(true);
