@@ -18,6 +18,7 @@ import type { CheckResult } from '../services/ai/schema.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 import { getOutlineRows, groupOutlinePeople, matchesOutline, supervisesOutlineSubmission } from '../services/outlineProgress.js';
 import { PLAN_MAJORS as majors } from '../services/planIdentification.js';
+import { identifyCourse } from '../services/courseIdentification.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
@@ -168,6 +169,21 @@ userRouter.put('/courses/:id', (req, res) => {
 });
 
 // ---------- 上传与检查 ----------
+userRouter.post('/submissions/identify-course', singleUpload(SUPPORTED_DOC_EXT), async (req, res) => {
+  const file = req.file;
+  try {
+    if (!file) return res.status(400).json({ error: '请选择要识别的大纲文件' });
+    const text = await extractFile(file.path, file.originalname);
+    const courses = db.prepare('SELECT DISTINCT course_name FROM outline_requirements ORDER BY course_name').all() as { course_name: string }[];
+    res.json(identifyCourse(file.originalname, text, courses.map((course) => course.course_name)));
+  } catch (e) {
+    if (e instanceof ExtractError) return res.status(400).json({ error: e.message });
+    throw e;
+  } finally {
+    cleanupTmp(file);
+  }
+});
+
 userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res) => {
   const file = req.file;
   try {

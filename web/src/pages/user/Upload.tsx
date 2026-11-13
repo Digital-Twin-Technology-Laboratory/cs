@@ -2,7 +2,7 @@ import { Alert, App, AutoComplete, Button, Card, Dropdown, Form, Input, Select, 
 import Table from '../../components/ResponsiveTable';
 import { DeleteOutlined, DownloadOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, qs } from '../../api';
 import { useAuth } from '../../auth';
@@ -16,6 +16,61 @@ interface UploadValues {
 interface UploadResult {
   submissionId?: number;
   error?: string;
+}
+
+interface CourseIdentification {
+  name: string | null;
+  source: string | null;
+  matched: boolean;
+  candidates: string[];
+}
+
+interface IdentificationState {
+  result?: CourseIdentification;
+  error?: string;
+}
+
+function CourseName({ file, courseOptions, disabled, identification, onIdentified }: {
+  file: UploadFile;
+  courseOptions: { value: string }[];
+  disabled: boolean;
+  identification?: IdentificationState;
+  onIdentified: (uid: string, state: IdentificationState) => void;
+}) {
+  const form = Form.useFormInstance<UploadValues>();
+  useEffect(() => {
+    let current = true;
+    const fd = new FormData();
+    fd.append('file', file.originFileObj!);
+    api.post<CourseIdentification>('/api/submissions/identify-course', fd)
+      .then((result) => {
+        if (!current) return;
+        if (result.name && !form.isFieldTouched(['outlines', file.uid, 'name'])) {
+          form.setFieldValue(['outlines', file.uid, 'name'], result.name);
+        }
+        onIdentified(file.uid, { result });
+      })
+      .catch((e: Error) => { if (current) onIdentified(file.uid, { error: e.message }); });
+    return () => { current = false; };
+  }, [file.uid, file.originFileObj, form, onIdentified]);
+
+  const result = identification?.result;
+  const candidates = [...new Set([...(result?.candidates ?? []), ...courseOptions.map(({ value }) => value)])].map((value) => ({ value }));
+  return <>
+    <Form.Item name={['outlines', file.uid, 'name']} rules={[{ required: true, whitespace: true, message: '请填写或选择课程名称' }]} style={{ marginBottom: 4 }} preserve={false}>
+      <AutoComplete options={candidates}
+        filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={disabled}>
+        <Input maxLength={100} placeholder="自动识别后可修改或选择课程" aria-label={`${file.name}的课程名称`} />
+      </AutoComplete>
+    </Form.Item>
+    <div className="small muted" role="status">
+      {!identification ? '正在提取并匹配课程名称…'
+        : identification.error ? `识别失败：${identification.error}；请手动填写课程名称。`
+          : result?.name ? `${result.source}：${result.name}（${result.matched ? '已匹配课程清单' : '未在课程清单中找到，请核对'}）`
+            : result?.candidates.length ? `识别到多个候选：${result.candidates.join('、')}，请选择。`
+              : '未识别到课程名称，请手动填写或选择。'}
+    </div>
+  </>;
 }
 
 function MatchedPlan({ uid }: { uid: string }) {
@@ -49,22 +104,28 @@ function MatchedPlan({ uid }: { uid: string }) {
 }
 
 export default function Upload() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { checkQuota, refresh } = useAuth();
   const [form] = Form.useForm<UploadValues>();
   const [options, setOptions] = useState<Options | null>(null);
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [results, setResults] = useState<Record<string, UploadResult>>({});
+  const [identifications, setIdentifications] = useState<Record<string, IdentificationState>>({});
   const [submitting, setSubmitting] = useState(false);
   const [activeUid, setActiveUid] = useState<string | null>(null);
   const planGrade = Form.useWatch('planGrade', form) ?? 2025;
   const pendingCount = files.filter((file) => !results[file.uid]?.submissionId).length;
+  const identifying = files.some((file) => !results[file.uid]?.submissionId && !identifications[file.uid]);
   const downloadablePlans = (options?.plans ?? []).filter((plan) => plan.grade === planGrade && plan.downloadable);
   const courseOptions = [...new Map((options?.outlineCourses ?? []).map(({ name }) => [name.toLowerCase(), { value: name }])).values()];
 
   useEffect(() => {
     api.get<Options>('/api/options').then(setOptions).catch((e) => message.error(e.message));
   }, [message]);
+
+  const onIdentified = useCallback((uid: string, state: IdentificationState) => {
+    setIdentifications((prev) => ({ ...prev, [uid]: state }));
+  }, []);
 
   const submit = async (values: UploadValues) => {
     const pending = files.filter((file) => !results[file.uid]?.submissionId);
@@ -98,12 +159,34 @@ export default function Upload() {
     }
   };
 
+  const confirmSubmit = (values: UploadValues) => {
+    if (identifying) return message.warning('正在识别课程名称，请稍候');
+    modal.confirm({
+      title: '确认课程名称并提交检查',
+      width: 760,
+      okText: '确认并提交检查',
+      cancelText: '返回修改',
+      content: <>
+        <p>请核对每个文件对应的课程名称。如不准确，请返回修改；确认后才会保存上传记录并加入检查队列。</p>
+        <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+          {files.filter((file) => !results[file.uid]?.submissionId).map((file) => (
+            <div key={file.uid} style={{ padding: '12px 0', borderBottom: '1px solid #f0f0f0', overflowWrap: 'anywhere' }}>
+              <div className="muted small">文件：{file.name}</div>
+              <div>课程名称：<strong>{values.outlines[file.uid].name}</strong></div>
+            </div>
+          ))}
+        </div>
+      </>,
+      onOk: () => submit(values),
+    });
+  };
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>上传检查</h1>
-          <div className="sub">支持一次选择多个大纲，每个文件一行，分别选择年级和专业。检查完成后，请查看结果并确认提交。</div>
+          <div className="sub">支持一次选择多个大纲，自动提取并匹配课程名称，提交检查前请确认；年级和专业分别选择。检查完成后，请查看结果并确认提交。</div>
         </div>
         <Link to="/submissions"><Button>查看上传记录</Button></Link>
       </div>
@@ -126,7 +209,7 @@ export default function Upload() {
           layout="vertical"
           disabled={submitting}
           initialValues={{ planGrade: 2025 }}
-          onFinish={submit}
+          onFinish={confirmSubmit}
         >
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 16 }}>
             <Form.Item label="人才培养方案年级（应用于待上传大纲）" name="planGrade" rules={[{ required: true, message: '请选择人才培养方案年级' }]}
@@ -177,12 +260,8 @@ export default function Upload() {
                 {
                   title: '课程名称', width: 210,
                   render: (_: unknown, file: UploadFile) => (
-                    <Form.Item name={['outlines', file.uid, 'name']} initialValue={file.name.replace(/\.[^.]+$/, '').slice(0, 100)} rules={[{ required: true, whitespace: true, message: '请填写课程名称' }]} style={{ marginBottom: 0 }} preserve={false}>
-                      <AutoComplete options={courseOptions}
-                        filterOption={(input, option) => String(option?.value).toLowerCase().includes(input.toLowerCase())} style={{ width: '100%' }} disabled={submitting || !!results[file.uid]?.submissionId}>
-                        <Input maxLength={100} placeholder="可自由填写课程名，也可从下拉列表选择" aria-label={`${file.name}的课程名称`} />
-                      </AutoComplete>
-                    </Form.Item>
+                    <CourseName file={file} courseOptions={courseOptions} disabled={submitting || !!results[file.uid]?.submissionId}
+                      identification={identifications[file.uid]} onIdentified={onIdentified} />
                   ),
                 },
                 {
@@ -222,8 +301,8 @@ export default function Upload() {
             />
           )}
           {files.length > 0 && <p className="muted small">云清单仅用于总览展示和进度统计，不限制上传账号、课程或执笔人。课程下拉只选择课程名称，不自动填写专业；请按实际授课对象手动选择专业。匹配明确时自动关联应交任务，无法明确关联时仍可上传并保留检查记录，不误计入其他任务的进度。系统按每行专业匹配培养方案，未预置方案时仍可检查，方案比对项列为需核实。</p>}
-          <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || checkQuota?.remaining === 0}>
-            {files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
+          <Button type="primary" size="large" htmlType="submit" loading={submitting} disabled={!options?.aiReady || !options.checklist || !pendingCount || identifying || checkQuota?.remaining === 0}>
+            {identifying ? '正在识别课程名称…' : files.length > 1 ? `提交检查（${pendingCount}份）` : '提交检查'}
           </Button>
         </Form>
       </Card>
