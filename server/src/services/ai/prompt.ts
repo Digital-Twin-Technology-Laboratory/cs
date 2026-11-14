@@ -24,7 +24,7 @@ note 用一两句话说明判断理由。
 四、需核实事项（写入 toVerify，不写入 issues，不作为问题判定依据）
 - 仅限本次大纲和对照培养方案中无法可靠辨认、需要人工确认的具体内容，不检查其他教学材料。
 - 教案、教学进度表、实验记录、成绩单、独立评分标准、纸质签字和归档手续等不在检查范围内，不因其未提供而判错或列入 toVerify。大纲修改后的跨材料一致性仅作建议完善提醒，不影响检查结论。
-- 如果消息中注明“未预置对照培养方案”，凡需要与培养方案比对的内容（课程信息与方案一致性、开课顺序、毕业要求指标编号和正文、支撑矩阵及H/M/L等），在 toVerify 中列出需对照方案核实的具体内容；大纲内部能够确认的问题照常列出。
+- 如果消息中注明“未预置对照培养方案”，凡需要与培养方案比对的内容（课程信息与方案一致性、开课顺序、毕业要求指标编号和正文、支撑矩阵及已标注的H/M/L等），在 toVerify 中列出需对照方案核实的具体内容；大纲内部能够确认的问题照常列出。
 
 五、写作要求
 1. 同一实际问题涉及多个清单条目时，合并为一条问题，itemCodes 列出全部相关条目编号。
@@ -83,7 +83,7 @@ export function buildUserPrompt(p: PromptInput): string {
     if (note?.after) parts.push(note.after);
   }
   if (p.checklist.rules) parts.push(`\n# 判定规则\n${p.checklist.rules}`);
-  parts.push(`\n# 本次检查范围（优先于清单中的旧版跨材料要求）\n${SYLLABUS_SCOPE_RULES}\n建议完善中的跨材料条目在 itemResults 中记为“不适用”，note 说明仅作提醒，不写入 issues 或 toVerify；报告会固定展示相关材料一致性提醒。`);
+  parts.push(`\n# 本次检查范围与判定约束（优先于清单中的冲突要求）\n${SYLLABUS_SCOPE_RULES}\n建议完善中的跨材料条目在 itemResults 中记为“不适用”，note 说明仅作提醒，不写入 issues 或 toVerify；报告会固定展示相关材料一致性提醒。`);
 
   const c = p.course;
   const publicCourse = c.major === '公共';
