@@ -38,13 +38,13 @@ userRouter.get('/progress', (req, res) => {
 });
 
 const legacyMajors = ['中外物联网', '物联网工程（合作办学）', '智能无人机系统与应用（微专业）', '计算机公共教学', '专转本'] as const;
-const studentGrades = [2023, 2024, 2025, 2026];
+const studentGrades = [2022, 2023, 2024, 2025, 2026];
 export const courseSchema = z.object({
   name: z.string().trim().min(1, '请填写课程名称').max(100),
   major: z.enum([...majors, ...legacyMajors], { error: '请选择指定的专业' }),
   trainingType: z.string().trim().min(1, '请选择培养类型').max(50).default('普通本科'),
-  studentGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择23、24、25或26级'),
-  planGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择2023、2024、2025或2026级人才培养方案').default(2025),
+  studentGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择22、23、24、25或26级'),
+  planGrade: z.coerce.number().int().refine((grade) => studentGrades.includes(grade), '请选择2022、2023、2024、2025或2026级人才培养方案').default(2025),
   adjustNote: z.string().trim().max(500).default(''),
 });
 
@@ -220,7 +220,7 @@ userRouter.post('/submissions', singleUpload(SUPPORTED_DOC_EXT), async (req, res
     if (body.major === '计算机科学与技术（专转本）') body.trainingType = '专转本';
 
     const requirements = db.prepare(`SELECT id, writer_user_id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
-      AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
+      AND (professional = ? OR (? IN ('中外物联网', '物联网工程（中外合作）') AND professional = '物联网工程（合作办学）')
         OR (? = '计算机科学与技术（专转本）' AND professional = '专转本')
         OR (? = '公共' AND professional = '计算机公共教学'))`)
       .all(body.name, body.major, body.major, body.major, body.major) as { id: number; writer_user_id: number | null }[];
@@ -419,7 +419,7 @@ userRouter.put('/submissions/:id', (req, res) => {
     }
     if (requirementId === null && (body.course_name !== undefined || body.major !== undefined)) {
       const requirements = db.prepare(`SELECT id, writer_user_id FROM outline_requirements WHERE course_name = ? COLLATE NOCASE
-        AND (professional = ? OR (? = '中外物联网' AND professional = '物联网工程（合作办学）')
+        AND (professional = ? OR (? IN ('中外物联网', '物联网工程（中外合作）') AND professional = '物联网工程（合作办学）')
           OR (? = '计算机科学与技术（专转本）' AND professional = '专转本')
           OR (? = '公共' AND professional = '计算机公共教学'))`)
         .all(course.name, course.major, course.major, course.major, course.major) as { id: number; writer_user_id: number | null }[];

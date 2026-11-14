@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { splitPublicPlan } from './publicPlan.js';
 
-export const PLAN_MAJORS = ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '人工智能', '公共'] as const;
+export const PLAN_MAJORS = ['计算机科学与技术', '计算机科学与技术（专转本）', '物联网工程', '物联网工程（中外合作）', '人工智能', '公共'] as const;
 
 export function identifyPlanMajor(fileName: string, text: string) {
   const sections = splitPublicPlan(text);
