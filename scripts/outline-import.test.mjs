@@ -44,6 +44,25 @@ test('outline import merges parallel classes and keeps unassigned outlines', asy
   await assert.rejects(readOutlineFile(file), /课程清单必须包含/);
 });
 
+test('cloud computing uses the transfer program without changing other course majors', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'outline-import-'));
+  t.after(async () => {
+    assert.equal(path.dirname(directory), os.tmpdir());
+    assert.match(path.basename(directory), /^outline-import-/);
+    await rm(directory, { recursive: true });
+  });
+  const file = { path: path.join(directory, 'roster.csv'), originalname: 'roster.csv' };
+  const header = '课程名称,课程组,审核专业,大纲执笔人\n';
+  const group = '程序设计与计算机系统类课程组';
+  await writeFile(file.path, header + `云计算技术,${group},物联网工程,张老师\n物联网基础,${group},物联网工程,李老师\n`);
+  const result = await readOutlineFile(file);
+  assert.equal(result.rows[0].professional, '计算机科学与技术（专转本）');
+  assert.equal(JSON.parse(result.rows[0].source_key)[1], '计算机科学与技术（专转本）');
+  assert.equal(result.rows[1].professional, '物联网工程');
+  await writeFile(file.path, header + `云计算技术,${group},计算机科学与技术（专转本）,张老师\n物联网基础,${group},物联网工程,李老师\n`);
+  assert.deepEqual((await readOutlineFile(file)).rows, result.rows);
+});
+
 test('Tencent import accepts only public sheet URLs on the exact HTTPS host', async () => {
   for (const url of ['http://docs.qq.com/sheet/Dabc', 'https://docs.qq.com.example.com/sheet/Dabc', 'https://docs.qq.com:123/sheet/Dabc', 'https://user:password@docs.qq.com/sheet/Dabc', 'https://docs.qq.com/doc/Dabc', 'https://127.0.0.1/sheet/Dabc', 'not-a-url']) {
     await assert.rejects(readTencentOutline(url));

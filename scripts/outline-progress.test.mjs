@@ -780,4 +780,38 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     assert.equal(publicSnapshot.major, '公共');
     assert.equal(publicSnapshot.publicPlanMatch, undefined, 'Editing course identity clears stale public-plan positioning');
   });
+
+  await t.test('cloud computing migration preserves task identity, writers and uploaded results across imports', async () => {
+    const sourceKey = JSON.stringify(['云计算技术', iot, groupA, 'name', '执笔人甲']);
+    const taskId = Number(database.prepare(`INSERT INTO outline_requirements
+      (source_key, course_name, course_group, professional, writer_name, writer_user_id, writer_manual)
+      VALUES (?, '云计算技术', ?, ?, '执笔人甲', ?, 1)`)
+      .run(sourceKey, groupA, iot, aliceId).lastInsertRowid);
+    const submissionId = seed(aliceId, '云计算技术', iot, 'passed', taskId);
+    const submission = database.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId);
+    const otherTask = database.prepare('SELECT * FROM outline_requirements WHERE id = ?').get(unmatched.id);
+    database.prepare("DELETE FROM settings WHERE key = 'cloud_computing_professional_corrected'").run();
+    const migrated = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/db.ts'], {
+      cwd: root, env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(migrated.status, 0, migrated.stderr);
+    const corrected = database.prepare('SELECT * FROM outline_requirements WHERE id = ?').get(taskId);
+    assert.equal(corrected.professional, '计算机科学与技术（专转本）');
+    assert.equal(JSON.parse(corrected.source_key)[1], corrected.professional);
+    assert.equal(corrected.writer_user_id, aliceId);
+    assert.equal(corrected.writer_manual, 1);
+    assert.deepEqual(database.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId), submission);
+    assert.deepEqual(database.prepare('SELECT * FROM outline_requirements WHERE id = ?').get(unmatched.id), otherTask);
+    for (const professional of [iot, '计算机科学与技术（专转本）']) {
+      const source = `课程名称,课程组,审核专业,大纲执笔人\n云计算技术,${groupA},${professional},执笔人甲\n`;
+      assert.equal((await importSource(admin, source)).status, 200);
+      const rows = (await admin('/api/supervision-management')).data.requirements;
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].id, taskId);
+      assert.equal(rows[0].professional, '计算机科学与技术（专转本）');
+      assert.equal(rows[0].user_id, aliceId);
+      assert.equal(rows[0].latest_id, submissionId);
+      assert.equal(rows[0].verdict, 'passed');
+    }
+  });
 });

@@ -37,7 +37,9 @@ function importTable(table: unknown[][], name: string) {
     if (!course_name) throw new RosterImportError(`第 ${index + 1} 行课程名称为空，请核对原始清单`);
     const rawGroup = value('课程组').replace(/\s/g, '');
     const course_group = GROUP_PRESETS.find((preset) => preset.group.toLowerCase() === rawGroup.toLowerCase())?.group ?? '';
-    const professional = value('审核专业');
+    const rawProfessional = value('审核专业');
+    const professional = course_name === '云计算技术' && rawProfessional === '物联网工程'
+      ? '计算机科学与技术（专转本）' : rawProfessional;
     const writer_name = value('大纲执笔人');
     const writer_identifier = value('大纲执笔人工号') || value('执笔人工号');
     if (names(writer_name).length > 1 || names(writer_identifier).length > 1) {

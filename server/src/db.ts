@@ -284,6 +284,19 @@ if (!submissionColumns.some((column) => column.name === 'verdict_edited_at')) {
 if (!submissionColumns.some((column) => column.name === 'verdict_edited_by')) {
   db.exec("ALTER TABLE submissions ADD COLUMN verdict_edited_by TEXT NOT NULL DEFAULT ''");
 }
+
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'cloud_computing_professional_corrected'").get()) {
+  db.transaction(() => {
+    db.exec(`
+      UPDATE outline_requirements
+      SET professional = '计算机科学与技术（专转本）',
+        source_key = json_set(source_key, '$[1]', '计算机科学与技术（专转本）')
+      WHERE course_name = '云计算技术' AND professional = '物联网工程'
+    `);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('cloud_computing_professional_corrected', '1')").run();
+  })();
+}
+
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'submission_sequences_initialized'").get()) {
   db.transaction(() => {
     db.exec(`
