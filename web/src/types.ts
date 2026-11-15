@@ -98,6 +98,25 @@ export interface CourseInfo {
   publicPlanMatch?: { matches: { major: string; evidence: string }[]; unresolved: string[] };
 }
 
+export type HistoryTeacher = Pick<User, 'id' | 'name' | 'username'>;
+
+export interface TeacherIssueHistoryData {
+  teacher: HistoryTeacher;
+  total: number;
+  rows: {
+    id: number;
+    seq: number;
+    file_name: string;
+    created_at: string;
+    finished_at: string | null;
+    verdict: 'passed' | 'failed';
+    verdict_edited_at: string | null;
+    verdict_edited_by: string;
+    course: CourseInfo;
+    result: CheckResult;
+  }[];
+}
+
 export interface SubmissionDetail {
   id: number;
   course_id: number;

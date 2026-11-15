@@ -1,4 +1,4 @@
-import { Alert, App, Breadcrumb, Button, Card, Collapse, Popconfirm, Result, Space, Spin } from 'antd';
+import { Alert, App, Breadcrumb, Button, Card, Collapse, Drawer, Popconfirm, Result, Space, Spin } from 'antd';
 import { CheckOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -6,6 +6,7 @@ import { api } from '../../api';
 import { useAuth } from '../../auth';
 import ResultView, { SubmissionMeta } from '../../components/ResultView';
 import SubmissionCourseEditor from '../../components/SubmissionCourseEditor';
+import TeacherIssueHistory from '../../components/TeacherIssueHistory';
 import type { ChecklistItem, SectionMeta, SubmissionDetail as Sub } from '../../types';
 
 interface Resp {
@@ -22,6 +23,7 @@ export default function SubmissionDetail() {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const load = useCallback(
     () =>
@@ -47,6 +49,7 @@ export default function SubmissionDetail() {
   if (!data) return <div className="page" style={{ textAlign: 'center', paddingTop: 80 }}><Spin /></div>;
   const s = data.submission;
   const isOther = s.user_id !== user?.id;
+  const canViewHistory = user?.role === 'admin' || user?.college_role === 'teaching';
 
   const confirm = async () => {
     setConfirming(true);
@@ -85,7 +88,7 @@ export default function SubmissionDetail() {
   };
 
   return (
-    <div className="page">
+    <div className={`page${historyOpen && canViewHistory ? ' history-comparing' : ''}`}>
       <Breadcrumb
         className="no-print"
         style={{ marginBottom: 12 }}
@@ -102,7 +105,10 @@ export default function SubmissionDetail() {
             {isOther && `提交人：${s.owner?.name}（${s.owner?.username}）　`}检查清单：{data.checklist?.name ?? '—'}
           </div>
         </div>
-        <SubmissionCourseEditor id={s.id} ownerId={s.user_id} name={s.course.name} status={s.status} onSaved={load} />
+        <Space wrap className="no-print">
+          {canViewHistory && <Button onClick={() => setHistoryOpen(true)}>对照该教师历史问题</Button>}
+          <SubmissionCourseEditor id={s.id} ownerId={s.user_id} name={s.course.name} status={s.status} onSaved={load} />
+        </Space>
       </div>
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         <Collapse className="no-print" items={[{ key: 'meta', label: '查看课程与上传信息', children: <SubmissionMeta sub={s} /> }]} />
@@ -155,6 +161,10 @@ export default function SubmissionDetail() {
         )}
         {s.status === 'done' && s.result && data.checklist && <ResultView sub={s} items={data.checklist.items} sections={data.sections} />}
       </Space>
+      {canViewHistory && <Drawer className="no-print" title="对照该教师历史问题" open={historyOpen} mask={false}
+        onClose={() => setHistoryOpen(false)} size="min(560px, 100vw)" destroyOnHidden>
+        {historyOpen && <TeacherIssueHistory key={s.id} teacherId={s.user_id} beforeId={s.id} />}
+      </Drawer>}
     </div>
   );
 }

@@ -132,6 +132,7 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
   const actions = <Space wrap>
     <Button onClick={() => setRefresh((n) => n + 1)}>刷新进度</Button>
     {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/submissions?scope=college"><Button>全院检查记录</Button></Link>}
+    {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/teacher-history"><Button>教师历史问题</Button></Link>}
     {user && (user.role === 'admin' || user.supervision_manager === 1) && <Link to="/view-management"><Button>视图与执笔人配置</Button></Link>}
   </Space>;
   return <div className={embedded ? undefined : 'page'}>

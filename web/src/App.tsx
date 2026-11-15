@@ -15,6 +15,7 @@ import Profile from './pages/user/Profile';
 import Overview from './pages/user/Overview';
 import Supervision from './pages/user/Supervision';
 import ViewManagement from './pages/user/ViewManagement';
+import TeacherHistory from './pages/user/TeacherHistory';
 import Dashboard from './pages/admin/Dashboard';
 import Users from './pages/admin/Users';
 import Records from './pages/admin/Records';
@@ -56,6 +57,7 @@ export default function App() {
         <Route index element={<Navigate to="/overview" replace />} />
         <Route path="overview" element={<Overview />} />
         <Route path="supervision" element={<Supervision />} />
+        <Route path="teacher-history" element={user && (user.role === 'admin' || user.college_role === 'teaching') ? <TeacherHistory /> : <Navigate to="/" replace />} />
         <Route path="view-management" element={user && (user.role === 'admin' || user.supervision_manager) ? <ViewManagement /> : <Navigate to="/" replace />} />
         <Route path="upload" element={<Upload />} />
         <Route path="courses" element={<Courses />} />
