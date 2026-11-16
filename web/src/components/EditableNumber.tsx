@@ -1,4 +1,4 @@
-import { App, InputNumber } from 'antd';
+import { App, Button, InputNumber, Popover } from 'antd';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../api';
@@ -75,7 +75,27 @@ export function EditableNumber({ value, name, min = 0, onSave, format = String, 
 }
 
 export default function StoredNumber({ scope, name, value }: Override) {
-  const { save } = useContext(Context);
-  const stored = useStoredNumber();
-  return <EditableNumber name={name} value={stored(scope, name, value)} onSave={(next) => save(scope, name, next)} />;
+  const { values, save } = useContext(Context);
+  const { user } = useAuth();
+  const { message } = App.useApp();
+  const [restoring, setRestoring] = useState(false);
+  const manualValue = values[numberKey(scope, name)];
+  const restore = async () => {
+    setRestoring(true);
+    try { await save(scope, name, null); }
+    catch (e) { message.error((e as Error).message); }
+    finally { setRestoring(false); }
+  };
+  return <>
+    <EditableNumber name={name} value={manualValue ?? value} onSave={(next) => save(scope, name, next)} />
+    {manualValue !== undefined && <Popover trigger="click" title="手工修正的统计数字" content={<div style={{ maxWidth: 260 }}>
+      <div>自动统计：{value}</div>
+      <p>当前显示手工修正值，不会随课程记录自动变化。</p>
+      {user?.role === 'admin'
+        ? <Button size="small" loading={restoring} onClick={restore}>恢复自动统计</Button>
+        : <div className="muted small">如需恢复自动统计，请联系管理员。</div>}
+    </div>}>
+      <Button type="link" size="small" aria-label="查看手工修正说明" style={{ color: '#ad6800', paddingInline: 4 }}>手工</Button>
+    </Popover>}
+  </>;
 }
