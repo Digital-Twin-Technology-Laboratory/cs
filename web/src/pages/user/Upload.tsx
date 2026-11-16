@@ -194,13 +194,17 @@ export default function Upload() {
       <Card title="上传前自查" style={{ marginBottom: 16 }}>
         <Space wrap style={{ marginBottom: 12 }}>
           <Button icon={<EyeOutlined />} onClick={() => setTemplatePreviewOpen(true)}>预览教学大纲模板</Button>
-          <Button icon={<DownloadOutlined />} href="/api/syllabus-template.docx">下载教学大纲模板</Button>
+          <Button icon={<DownloadOutlined />} href="/api/syllabus-template.docx">下载教务处大纲模板</Button>
           <Button icon={<DownloadOutlined />} href="/api/checklist.docx" disabled={!options?.checklist}>下载检查清单</Button>
+          <Button icon={<DownloadOutlined />} href="/api/ai-introduction-syllabus.docx">下载人工智能导论大纲</Button>
         </Space>
         <div className="prose">
           请先核对课程信息、课程目标与毕业要求的对应关系，以及教学内容、学时和考核比例是否一致。<br />
-          同时自查大纲中的课程支撑矩阵、实验安排、评分标准及审核信息；可下载教学大纲模板，完整要求请下载清单，逐项自查后再上传。
+          同时自查大纲中的课程支撑矩阵、实验安排、评分标准及审核信息；可下载教务处大纲模板，完整要求请下载清单，逐项自查后再上传。<br />
+          《人工智能导论》大纲（批注版）供参考。使用时请参考文档批注，结合本人及所授课程的实际情况替换相关信息和内容。
         </div>
+        <Alert type="warning" showIcon style={{ marginTop: 12 }}
+          title={<strong>请务必确保修改后的大纲与档案盒中的试卷等材料保持一致！</strong>} />
         {options && !options.checklist && <div className="muted small">管理员尚未设置生效的检查清单，请联系管理员。</div>}
       </Card>
       <Modal title="教学大纲模板预览" open={templatePreviewOpen} width={1100} destroyOnHidden onCancel={() => setTemplatePreviewOpen(false)}

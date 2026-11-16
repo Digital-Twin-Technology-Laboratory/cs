@@ -58,6 +58,10 @@ userRouter.get('/syllabus-template.docx', (_req, res) => {
   res.download(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'), '教学大纲模板.docx');
 });
 
+userRouter.get('/ai-introduction-syllabus.docx', (_req, res) => {
+  res.download(path.join(ROOT_DIR, 'server/assets/ai-introduction-syllabus.docx'), '《人工智能导论》课程大纲-2026-2027-1-批注版.docx');
+});
+
 userRouter.get('/syllabus-template/preview', async (_req, res) => {
   const html = await docxToHtml(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'));
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
