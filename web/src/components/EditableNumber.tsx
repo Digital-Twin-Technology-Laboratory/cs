@@ -45,6 +45,25 @@ export function useStoredNumber() {
   return (scope: string, name: string, fallback: number) => values[numberKey(scope, name)] ?? fallback;
 }
 
+export function RestoreStatisticsButton({ numbers }: { numbers: Pick<Override, 'scope' | 'name'>[] }) {
+  const { values, save } = useContext(Context);
+  const { user } = useAuth();
+  const { message } = App.useApp();
+  const [restoring, setRestoring] = useState(false);
+  const targets = numbers.filter(({ scope, name }) => values[numberKey(scope, name)] !== undefined);
+  const restore = async () => {
+    setRestoring(true);
+    try {
+      for (const { scope, name } of targets) await save(scope, name, null);
+      message.success('当前范围的统计数字已恢复自动统计');
+    } catch (e) { message.error((e as Error).message); }
+    finally { setRestoring(false); }
+  };
+  if (user?.role !== 'admin') return null;
+  return <Button disabled={!targets.length} loading={restoring} onClick={restore}
+    title="恢复当前页面范围内的统计数字，不修改课程和上传记录">一键恢复自动统计</Button>;
+}
+
 export function EditableNumber({ value, name, min = 0, onSave, format = String, editable }: {
   value: number; name: string; min?: number; editable?: boolean;
   onSave: (value: number | null) => Promise<void>;
@@ -77,22 +96,14 @@ export function EditableNumber({ value, name, min = 0, onSave, format = String, 
 export default function StoredNumber({ scope, name, value }: Override) {
   const { values, save } = useContext(Context);
   const { user } = useAuth();
-  const { message } = App.useApp();
-  const [restoring, setRestoring] = useState(false);
   const manualValue = values[numberKey(scope, name)];
-  const restore = async () => {
-    setRestoring(true);
-    try { await save(scope, name, null); }
-    catch (e) { message.error((e as Error).message); }
-    finally { setRestoring(false); }
-  };
   return <>
     <EditableNumber name={name} value={manualValue ?? value} onSave={(next) => save(scope, name, next)} />
     {manualValue !== undefined && <Popover trigger="click" title="手工修正的统计数字" content={<div style={{ maxWidth: 260 }}>
       <div>自动统计：{value}</div>
       <p>当前显示手工修正值，不会随课程记录自动变化。</p>
       {user?.role === 'admin'
-        ? <Button size="small" loading={restoring} onClick={restore}>恢复自动统计</Button>
+        ? <div className="muted small">点击页面上方的“一键恢复自动统计”，恢复当前范围内的全部统计数字。</div>
         : <div className="muted small">如需恢复自动统计，请联系管理员。</div>}
     </div>}>
       <Button type="link" size="small" aria-label="查看手工修正说明" style={{ color: '#ad6800', paddingInline: 4 }}>手工</Button>

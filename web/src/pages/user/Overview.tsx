@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../api';
 import CourseProgressTable from '../../components/CourseProgressTable';
 import type { PersonalProgress } from '../../types';
-import StoredNumber from '../../components/EditableNumber';
+import StoredNumber, { RestoreStatisticsButton } from '../../components/EditableNumber';
 import { useAuth } from '../../auth';
 
 export default function Overview() {
@@ -30,6 +30,7 @@ export default function Overview() {
       <div><h1>个人总览</h1><div className="sub">仅显示云文档清单中指定你为执笔人的应交课程，每 1 小时自动刷新。</div></div>
       <Space wrap>
         <Button onClick={load}>刷新</Button>
+        <RestoreStatisticsButton numbers={['required', 'uploaded', 'passed', 'confirmed'].map((name) => ({ scope, name }))} />
         <Link to="/upload"><Button type="primary">上传大纲</Button></Link>
       </Space>
     </div>

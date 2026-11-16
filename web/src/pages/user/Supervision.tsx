@@ -6,7 +6,7 @@ import { useAuth } from '../../auth';
 import Table from '../../components/ResponsiveTable';
 import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import type { SubStatus } from '../../types';
-import StoredNumber, { useStoredNumber } from '../../components/EditableNumber';
+import StoredNumber, { RestoreStatisticsButton, useStoredNumber } from '../../components/EditableNumber';
 import SubmissionAttachments from '../../components/SubmissionAttachments';
 
 export interface RequirementRow {
@@ -110,6 +110,16 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
   const passed = scoped.filter(isPassed).length;
   const confirmed = scoped.filter(isConfirmed).length;
   const unassigned = scoped.filter((r) => r.user_id === null && !r.writer_name && !r.username).length;
+  const summaryStats = [['required', '课程总数', scoped.length], ['uploaded', '已上传 / 应交', uploaded], ['passed', '已通过 / 应交', passed], ['confirmed', '最终确认 / 应交', confirmed], ['missing', '尚未上传', scoped.length - uploaded], ['unassigned', '执笔人待定', unassigned]] as const;
+  const resetNumbers = [
+    ...summaryStats.map(([field]) => ({ scope: statisticScope, name: numberName(field) })),
+    ...peopleRows.flatMap((r) => [
+      personStat(r, 'required', r.courses.length),
+      personStat(r, 'uploaded', r.courses.filter((c) => c.latest_id !== null).length),
+      personStat(r, 'passed', r.courses.filter(isPassed).length),
+      personStat(r, 'confirmed', r.courses.filter(isConfirmed).length),
+    ]),
+  ];
   const courseRows = scoped.filter((r) => status === 'missing' ? r.latest_id === null : status === 'uploaded' ? r.latest_id !== null
     : status === 'pending' ? !isConfirmed(r) : status === 'confirmed' ? isConfirmed(r) : status === 'passed' ? isPassed(r)
     : status === 'not-passed' ? r.status === 'done' && r.verdict === 'failed' : true);
@@ -131,6 +141,7 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
     ]} />;
   const actions = <Space wrap>
     <Button onClick={() => setRefresh((n) => n + 1)}>刷新进度</Button>
+    <RestoreStatisticsButton numbers={resetNumbers} />
     {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/submissions?scope=college"><Button>全院检查记录</Button></Link>}
     {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/teacher-history"><Button>教师历史问题</Button></Link>}
     {user && (user.role === 'admin' || user.supervision_manager === 1) && <Link to="/view-management"><Button>视图与执笔人配置</Button></Link>}
@@ -153,7 +164,7 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
         <Input placeholder="课程 / 执笔人 / 实际上传人 / 工号" value={q} allowClear onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ width: 270 }} />
       </Space>
       <Row gutter={[16, 16]}>
-        {([['required', '课程总数', scoped.length], ['uploaded', '已上传 / 应交', uploaded], ['passed', '已通过 / 应交', passed], ['confirmed', '最终确认 / 应交', confirmed], ['missing', '尚未上传', scoped.length - uploaded], ['unassigned', '执笔人待定', unassigned]] as const).map(([key, title, count], i) =>
+        {summaryStats.map(([key, title, count], i) =>
           <Col xs={12} md={4} key={key}><Statistic title={title} value={count} formatter={() => <StoredNumber scope={statisticScope} name={numberName(key)} value={count} />}
             suffix={i >= 1 && i <= 3 ? <>/ <StoredNumber scope={statisticScope} name={numberName('required')} value={scoped.length} /> 门</> : i === 5 ? '门课程' : '门'} /></Col>)}
       </Row>
