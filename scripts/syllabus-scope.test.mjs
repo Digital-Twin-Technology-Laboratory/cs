@@ -6,7 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { LEGACY_SEED_NAME, MATERIALS_REMINDER, SEED_INTRO, SEED_ITEMS, SEED_NAME, SEED_NOTES, SEED_RULES } from '../server/src/seed/checklist.ts';
+import { LEGACY_SEED_NAME, MATERIALS_REMINDER, SEED_INTRO, SEED_ITEMS, SEED_NAME, SEED_NOTES, SEED_RULES, SYLLABUS_SCOPE_RULES } from '../server/src/seed/checklist.ts';
 import { buildUserPrompt } from '../server/src/services/ai/prompt.ts';
 import { AI_RESULT_NOTICE, reportText } from '../server/src/services/report.ts';
 import * as webNotices from '../web/src/checkNotices.ts';
@@ -36,6 +36,29 @@ test('syllabus scope retains internal checks and plan comparison, with cross-mat
   assert.match(report, /检查结论：检查通过/);
   assert.equal(webNotices.AI_RESULT_NOTICE, AI_RESULT_NOTICE);
   assert.equal(webNotices.MATERIALS_REMINDER, MATERIALS_REMINDER);
+});
+
+test('teaching-hour rules distinguish theory(experiment) notation from a numeric subtotal, including with old checklists', () => {
+  for (const text of [SEED_ITEMS.find((item) => item.code === 'C06').content, SYLLABUS_SCOPE_RULES, SEED_RULES]) {
+    assert.match(text, /8（4）.*理论8.*实验4.*合计12/);
+    assert.match(text, /32（4）.*合计36/);
+    assert.match(text, /括号外.*不是总学时/);
+  }
+  const syllabus = '| 教学内容 | 理论 | 实验/实践 | 小计 |\n| 单元1 | 8 | | 8（4） |\n| 单元2 | 4 | 2 | 6 |\n合计：32(4)';
+  const text = buildUserPrompt({
+    checklist: { name: '已有清单', intro: '', notes: {}, rules: '', items: [
+      { code: 'C06', section: 'main', title: '教学学时与实验安排', content: '核算各章节、实验项目及总学时。' },
+    ] },
+    course: { name: '测试课程', major: '人工智能', trainingType: '普通本科', studentGrade: 2025, planGrade: 2025, adjustNote: '' },
+    plan: null,
+    syllabus: { fileName: '大纲.docx', text: syllabus },
+  });
+  assert.ok(text.includes(SYLLABUS_SCOPE_RULES));
+  assert.match(text, /A（B）或A\(B\)/);
+  assert.match(text, /分列.*4\+2=6/);
+  assert.match(text, /同一实验学时.*只计一次/);
+  assert.match(text, /不得仅因实验\/实践栏留空或使用括号记法.*判错/);
+  assert.ok(text.includes(syllabus));
 });
 
 test('upgrading the active legacy default forks a version, preserves historical records and custom items, and is idempotent', () => {
