@@ -393,6 +393,33 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.deepEqual((await teacher('/api/syllabus-template.docx')).data, next);
   });
 
+  await t.test('admins can independently replace the AI introduction syllabus and include it in backups', async () => {
+    const endpoint = '/api/admin/ai-introduction-syllabus';
+    const download = '/api/ai-introduction-syllabus.docx';
+    const makeForm = (buffer, name = 'ai.docx') => {
+      const form = new FormData();
+      form.append('file', new Blob([buffer]), name);
+      return form;
+    };
+    assert.deepEqual((await teacher(download)).data, readFileSync(path.join(root, 'server/assets/ai-introduction-syllabus.docx')));
+    const template = (await teacher('/api/syllabus-template.docx')).data;
+    const replacement = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('AI introduction replacement')] }] }));
+    assert.equal((await client()(endpoint, makeForm(replacement))).status, 401);
+    assert.equal((await teacher(endpoint, makeForm(replacement))).status, 403);
+    assert.equal((await admin(endpoint, makeForm(replacement))).status, 200);
+    assert.deepEqual((await teacher(download)).data, replacement);
+    assert.equal((await admin(endpoint, makeForm(Buffer.from('invalid')))).status, 400);
+    assert.equal((await admin(endpoint, makeForm(replacement, 'ai.pdf'))).status, 400);
+    assert.deepEqual((await teacher(download)).data, replacement);
+    assert.deepEqual((await teacher('/api/syllabus-template.docx')).data, template);
+    const zip = await JSZip.loadAsync((await admin('/api/admin/backup')).data);
+    assert.deepEqual(await zip.file('data/ai-introduction-syllabus.docx').async('nodebuffer'), replacement);
+    assert.deepEqual(await zip.file('data/syllabus-template.docx').async('nodebuffer'), template);
+    const next = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('Second AI introduction')] }] }));
+    assert.equal((await admin(endpoint, makeForm(next))).status, 200);
+    assert.deepEqual((await teacher(download)).data, next);
+  });
+
   await t.test('upload sequences follow course identity instead of a newly created course ID', async () => {
     const uploader = client();
     const registered = await uploader('/api/auth/register', { username: 'history-teacher', name: 'History Teacher', password: 'history12345' });

@@ -20,7 +20,7 @@ import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 import { getOutlineRows, groupOutlinePeople, matchesOutline, supervisesOutlineSubmission } from '../services/outlineProgress.js';
 import { PLAN_MAJORS as majors } from '../services/planIdentification.js';
 import { identifyCourse } from '../services/courseIdentification.js';
-import { ROOT_DIR, SYLLABUS_TEMPLATE } from '../config.js';
+import { AI_INTRODUCTION_SYLLABUS, ROOT_DIR, SYLLABUS_TEMPLATE } from '../config.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
@@ -59,7 +59,9 @@ userRouter.get('/syllabus-template.docx', (_req, res) => {
 });
 
 userRouter.get('/ai-introduction-syllabus.docx', (_req, res) => {
-  res.download(path.join(ROOT_DIR, 'server/assets/ai-introduction-syllabus.docx'), '《人工智能导论》课程大纲-2026-2027-1-批注版.docx');
+  const replaced = fs.existsSync(AI_INTRODUCTION_SYLLABUS);
+  res.download(replaced ? AI_INTRODUCTION_SYLLABUS : path.join(ROOT_DIR, 'server/assets/ai-introduction-syllabus.docx'),
+    replaced ? '《人工智能导论》课程大纲.docx' : '《人工智能导论》课程大纲-2026-2027-1-批注版.docx', { dotfiles: 'allow' });
 });
 
 userRouter.get('/syllabus-template/preview', async (_req, res) => {

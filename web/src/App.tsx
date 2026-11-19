@@ -24,6 +24,7 @@ import ChecklistEditor from './pages/admin/ChecklistEditor';
 import Plans from './pages/admin/Plans';
 import AiConfig from './pages/admin/AiConfig';
 import SiteSettings from './pages/admin/SiteSettings';
+import SyllabusTemplates from './pages/admin/SyllabusTemplates';
 import Logs from './pages/admin/Logs';
 
 function RequireAuth({ children, admin }: { children: React.ReactNode; admin?: boolean }) {
@@ -79,6 +80,7 @@ export default function App() {
           <Route path="records" element={<Records />} />
           <Route path="checklists" element={<Checklists />} />
           <Route path="checklists/:id" element={<ChecklistEditor />} />
+          <Route path="templates" element={<SyllabusTemplates />} />
           <Route path="plans" element={<Plans />} />
           <Route path="ai" element={<AiConfig />} />
           <Route path="settings" element={<SiteSettings />} />

@@ -7,6 +7,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = path.resolve(here, '..', '..');
 export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT_DIR, 'data');
 export const SYLLABUS_TEMPLATE = path.join(DATA_DIR, 'syllabus-template.docx');
+export const AI_INTRODUCTION_SYLLABUS = path.join(DATA_DIR, 'ai-introduction-syllabus.docx');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 export const PLAN_DIR = path.join(DATA_DIR, 'plans');
 export const TMP_DIR = path.join(DATA_DIR, 'tmp');
