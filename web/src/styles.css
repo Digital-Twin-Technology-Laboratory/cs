@@ -422,7 +422,14 @@ mark.hl {
   }
 }
 
+.print-only {
+  display: none;
+}
+
 @media print {
+  .print-only {
+    display: block;
+  }
   .app-header,
   .no-print {
     display: none !important;

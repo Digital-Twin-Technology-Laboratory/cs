@@ -102,6 +102,7 @@ export type HistoryTeacher = Pick<User, 'id' | 'name' | 'username'>;
 
 export interface TeacherIssueHistoryData {
   teacher: HistoryTeacher;
+  courses: string[];
   total: number;
   rows: {
     id: number;

@@ -1,6 +1,6 @@
-import { App, Button, Card, Form, Input, InputNumber, Radio, Select } from 'antd';
-import { DownloadOutlined } from '@ant-design/icons';
-import { useEffect } from 'react';
+import { App, Button, Card, Form, Input, InputNumber, Radio, Select, Space, Upload } from 'antd';
+import { DownloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 
@@ -8,6 +8,7 @@ export default function SiteSettings() {
   const { message } = App.useApp();
   const { refresh } = useAuth();
   const [form] = Form.useForm();
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     api.get('/api/admin/site').then((s) => form.setFieldsValue(s));
@@ -21,6 +22,20 @@ export default function SiteSettings() {
       refresh();
     } catch (e) {
       message.error((e as Error).message);
+    }
+  };
+
+  const uploadTemplate = async (file: File) => {
+    const body = new FormData();
+    body.append('file', file);
+    setUploading(true);
+    try {
+      await api.post('/api/admin/syllabus-template', body);
+      message.success('教学大纲模板已更换');
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -55,8 +70,17 @@ export default function SiteSettings() {
           </Form.Item>
         </Form>
       </Card>
+      <Card title="教学大纲模板" style={{ marginTop: 16 }}>
+        <p>更换上传页面供教师预览和下载的 Word 模板，不影响检查清单。</p>
+        <Space wrap>
+          <Upload accept=".docx" showUploadList={false} beforeUpload={(file) => (uploadTemplate(file), false)}>
+            <Button icon={<UploadOutlined />} loading={uploading}>上传并更换模板</Button>
+          </Upload>
+          <Button icon={<DownloadOutlined />} href="/api/syllabus-template.docx">下载当前模板</Button>
+        </Space>
+      </Card>
       <Card title="数据备份" style={{ marginTop: 16 }}>
-        <p>下载完整备份，包含账号与检查记录、上传原文件、培养方案和加密密钥。</p>
+        <p>下载完整备份，包含账号与检查记录、上传原文件、培养方案、已更换的教学大纲模板和加密密钥。</p>
         <Button icon={<DownloadOutlined />} href="/api/admin/backup">下载备份</Button>
         <p className="muted small">生成备份需要一些时间，请等待浏览器开始下载。备份含敏感数据，请妥善保管并另存到其他设备。</p>
       </Card>

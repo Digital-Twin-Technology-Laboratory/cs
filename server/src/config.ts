@@ -6,6 +6,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src 或 server/dist → 项目根目录
 export const ROOT_DIR = path.resolve(here, '..', '..');
 export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT_DIR, 'data');
+export const SYLLABUS_TEMPLATE = path.join(DATA_DIR, 'syllabus-template.docx');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 export const PLAN_DIR = path.join(DATA_DIR, 'plans');
 export const TMP_DIR = path.join(DATA_DIR, 'tmp');

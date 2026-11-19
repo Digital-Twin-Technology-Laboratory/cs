@@ -27,7 +27,7 @@ export default function TeacherHistory() {
     <div className="page-head"><div><h1>教师历史问题</h1>
       <div className="sub">按教师调取历次检查意见，供教学条线对照复查；在检查结果详情页也可直接查看该上传人此前的问题。</div>
     </div></div>
-    <Card style={{ marginBottom: 16 }}>
+    <Card className="no-print" style={{ marginBottom: 16 }}>
       <label htmlFor="history-teacher" style={{ marginRight: 12 }}>选择教师</label>
       <Select id="history-teacher" aria-label="选择历史问题教师" showSearch={{ optionFilterProp: 'label' }} allowClear
         placeholder="搜索姓名或工号" loading={loading} disabled={loading || !!error} value={teacherId}

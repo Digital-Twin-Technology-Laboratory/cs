@@ -20,7 +20,7 @@ import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 import { getOutlineRows, groupOutlinePeople, matchesOutline, supervisesOutlineSubmission } from '../services/outlineProgress.js';
 import { PLAN_MAJORS as majors } from '../services/planIdentification.js';
 import { identifyCourse } from '../services/courseIdentification.js';
-import { ROOT_DIR } from '../config.js';
+import { ROOT_DIR, SYLLABUS_TEMPLATE } from '../config.js';
 
 export const userRouter = Router();
 userRouter.use(requireAuth);
@@ -55,7 +55,7 @@ userRouter.get('/checklist', (_req, res) => {
 });
 
 userRouter.get('/syllabus-template.docx', (_req, res) => {
-  res.download(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'), '教学大纲模板.docx');
+  res.download(fs.existsSync(SYLLABUS_TEMPLATE) ? SYLLABUS_TEMPLATE : path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'), '教学大纲模板.docx', { dotfiles: 'allow' });
 });
 
 userRouter.get('/ai-introduction-syllabus.docx', (_req, res) => {
@@ -63,7 +63,7 @@ userRouter.get('/ai-introduction-syllabus.docx', (_req, res) => {
 });
 
 userRouter.get('/syllabus-template/preview', async (_req, res) => {
-  const html = await docxToHtml(path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'));
+  const html = await docxToHtml(fs.existsSync(SYLLABUS_TEMPLATE) ? SYLLABUS_TEMPLATE : path.join(ROOT_DIR, 'server/assets/syllabus-template.docx'));
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
   res.type('html').send(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

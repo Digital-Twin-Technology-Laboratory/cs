@@ -174,6 +174,22 @@ test('teacher issue history preserves findings and enforces teaching-only access
     assert.equal((await admin(`${history}&beforeId=${other}`)).status, 404);
   });
 
+  await t.test('course filtering uses historical course names and print returns all matching pages', async () => {
+    database.prepare("UPDATE submissions SET course_snapshot = json_set(course_snapshot, '$.name', ?) WHERE id = ?").run('Another course', verify);
+    for (let i = 0; i < 12; i++) seed('alice', severe);
+    const filtered = await admin(`${history}&course=${encodeURIComponent('Historical course title')}&pageSize=1`);
+    assert.equal(filtered.data.total, 16);
+    assert.equal(filtered.data.rows.length, 1);
+    assert.deepEqual(filtered.data.courses, ['Another course', 'Historical course title']);
+    const printed = await admin(`${history}&course=${encodeURIComponent('Historical course title')}&all=1`);
+    assert.equal(printed.data.rows.length, 16);
+    assert.ok(printed.data.rows.every((row) => row.course.name === 'Historical course title'));
+    const otherCourse = await admin(`${history}&course=${encodeURIComponent('Another course')}`);
+    assert.deepEqual(otherCourse.data.rows.map((row) => row.id), [verify]);
+    assert.deepEqual((await admin(`${history}&course=missing`)).data.rows, []);
+    assert.equal((await users.alice.request(`${history}&all=1`)).status, 403);
+  });
+
   await t.test('revoking teaching access applies to an existing session immediately', async () => {
     assert.equal((await configure('teaching', {})).status, 200);
     assert.equal((await users.teaching.request(teachersEndpoint)).status, 403);

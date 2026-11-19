@@ -172,11 +172,13 @@ supervisionViewRouter.get('/issue-history/teachers', (_req, res) => {
 });
 
 supervisionViewRouter.get('/issue-history', (req, res) => {
-  const { teacherId, beforeId, page, pageSize } = z.object({
+  const { teacherId, beforeId, page, pageSize, course, all } = z.object({
     teacherId: z.coerce.number().int().positive(),
     beforeId: z.coerce.number().int().positive().optional(),
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(50).default(10),
+    course: z.string().min(1).optional(),
+    all: z.enum(['1']).optional(),
   }).parse(req.query);
   const teacher = db.prepare('SELECT id, name, username FROM users WHERE id = ?').get(teacherId);
   if (!teacher) return res.status(404).json({ error: '教师账号不存在' });
@@ -187,13 +189,15 @@ supervisionViewRouter.get('/issue-history', (req, res) => {
     `(json_array_length(result_json, '$.issues') > 0 OR json_array_length(result_json, '$.toVerify') > 0)`];
   const args: unknown[] = [teacherId];
   if (beforeId) { where.push('id < ?'); args.push(beforeId); }
+  const courses = (db.prepare(`SELECT DISTINCT json_extract(course_snapshot, '$.name') AS name FROM submissions WHERE ${where.join(' AND ')} ORDER BY name`).all(...args) as { name: string }[]).map((row) => row.name);
+  if (course) { where.push("json_extract(course_snapshot, '$.name') = ?"); args.push(course); }
   const clause = where.join(' AND ');
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM submissions WHERE ${clause}`).get(...args) as { n: number }).n;
   const rows = db.prepare(`SELECT id, seq, file_name, created_at, finished_at, verdict,
     verdict_edited_at, verdict_edited_by, course_snapshot, result_json
-    FROM submissions WHERE ${clause} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize) as
+    FROM submissions WHERE ${clause} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, all ? -1 : pageSize, all ? 0 : (page - 1) * pageSize) as
     { course_snapshot: string; result_json: string }[];
-  res.json({ teacher, total, rows: rows.map(({ course_snapshot, result_json, ...row }) => ({
+  res.json({ teacher, courses, total, rows: rows.map(({ course_snapshot, result_json, ...row }) => ({
     ...row, course: JSON.parse(course_snapshot), result: JSON.parse(result_json),
   })) });
 });

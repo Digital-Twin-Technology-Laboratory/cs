@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import fs from 'node:fs/promises';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import JSZip from 'jszip';
 import { z } from 'zod';
-import { DATA_DIR, TMP_DIR } from '../config.js';
+import { DATA_DIR, SYLLABUS_TEMPLATE, TMP_DIR } from '../config.js';
 import { applyDefaultGroupView, applyDefaultProfessionalView, audit, db } from '../db.js';
 import { requireAdmin, toPublic, type UserRow } from '../auth.js';
 import { DEFAULT_AI_SETTINGS, getSettings, saveSettings, type AiSettings } from '../settings.js';
@@ -14,7 +14,7 @@ import { DEFAULT_SYSTEM_PROMPT } from '../services/ai/prompt.js';
 import { aiReady, listModels, testConnection } from '../services/ai/provider.js';
 import { loadChecklist } from '../services/checklist.js';
 import { aiStructureChecklist, parseChecklistFile } from '../services/checklistImport.js';
-import { extractFile, ExtractError } from '../services/extract.js';
+import { docxToHtml, extractFile, ExtractError } from '../services/extract.js';
 import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { kickQueue } from '../services/checkQueue.js';
 import { getCheckQuota } from '../services/checkQuota.js';
@@ -790,6 +790,22 @@ adminRouter.post('/ai/test', async (req, res) => {
 });
 
 // ---------- 系统设置 ----------
+adminRouter.post('/syllabus-template', singleUpload(['.docx']), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '请选择 Word 模板文件' });
+  try {
+    try {
+      await docxToHtml(req.file.path);
+    } catch {
+      return res.status(400).json({ error: '无法读取该 Word 文件，请确认文件未损坏且为 .docx 格式' });
+    }
+    await fs.rename(req.file.path, SYLLABUS_TEMPLATE);
+    audit(req.user, '更换教学大纲模板', req.file.originalname, undefined, req.ip);
+    res.json({ ok: true });
+  } finally {
+    cleanupTmp(req.file);
+  }
+});
+
 adminRouter.get('/backup', async (req, res) => {
   const temporary = mkdtempSync(path.join(TMP_DIR, 'backup-'));
   const zip = new JSZip();
@@ -799,6 +815,7 @@ adminRouter.get('/backup', async (req, res) => {
     db.prepare('VACUUM INTO ?').run(snapshot);
     zip.file('data/app.db', readFileSync(snapshot));
     zip.file('data/secret.key', readFileSync(path.join(DATA_DIR, 'secret.key')));
+    if (existsSync(SYLLABUS_TEMPLATE)) zip.file('data/syllabus-template.docx', readFileSync(SYLLABUS_TEMPLATE));
     for (const directory of ['uploads', 'plans']) {
       zip.folder(`data/${directory}`);
       const folder = path.join(DATA_DIR, directory);

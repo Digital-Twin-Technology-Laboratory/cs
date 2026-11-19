@@ -370,6 +370,29 @@ test('account activation, daily check quota and checklist download', { timeout: 
     assert.match(html, /<table>/);
   });
 
+  await t.test('only admins can replace the template, and preview, download and backup use the replacement', async () => {
+    const endpoint = '/api/admin/syllabus-template';
+    const makeForm = (buffer, name = 'template.docx') => {
+      const form = new FormData();
+      form.append('file', new Blob([buffer]), name);
+      return form;
+    };
+    const replacement = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('Replacement template marker')] }] }));
+    assert.equal((await client()(endpoint, makeForm(replacement))).status, 401);
+    assert.equal((await teacher(endpoint, makeForm(replacement))).status, 403);
+    assert.equal((await admin(endpoint, makeForm(replacement))).status, 200);
+    assert.deepEqual((await teacher('/api/syllabus-template.docx')).data, replacement);
+    assert.match((await teacher('/api/syllabus-template/preview')).data.toString(), /Replacement template marker/);
+    assert.equal((await admin(endpoint, makeForm(Buffer.from('invalid')))).status, 400);
+    assert.equal((await admin(endpoint, makeForm(replacement, 'template.pdf'))).status, 400);
+    assert.deepEqual((await teacher('/api/syllabus-template.docx')).data, replacement);
+    const zip = await JSZip.loadAsync((await admin('/api/admin/backup')).data);
+    assert.deepEqual(await zip.file('data/syllabus-template.docx').async('nodebuffer'), replacement);
+    const next = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('Second template')] }] }));
+    assert.equal((await admin(endpoint, makeForm(next))).status, 200);
+    assert.deepEqual((await teacher('/api/syllabus-template.docx')).data, next);
+  });
+
   await t.test('upload sequences follow course identity instead of a newly created course ID', async () => {
     const uploader = client();
     const registered = await uploader('/api/auth/register', { username: 'history-teacher', name: 'History Teacher', password: 'history12345' });
