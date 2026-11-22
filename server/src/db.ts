@@ -219,6 +219,12 @@ CREATE TABLE IF NOT EXISTS material_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_material_run_case ON material_runs(case_id);
 CREATE INDEX IF NOT EXISTS idx_material_run_user ON material_runs(user_id);
+CREATE TABLE IF NOT EXISTS deleted_material_check_usage (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  quota_date TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  PRIMARY KEY (user_id, quota_date)
+);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER,

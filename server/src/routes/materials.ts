@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Router, type Request, type Response } from 'express';
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
 import { z } from 'zod';
-import { requireAuth } from '../auth.js';
+import { requireAuth, type PublicUser } from '../auth.js';
 import { audit, db } from '../db.js';
 import { PLAN_MAJORS } from '../services/planIdentification.js';
 import { findPlan, kickQueue } from '../services/checkQueue.js';
@@ -30,6 +30,8 @@ const corrections = z.object({
 });
 const listRuns = db.prepare('SELECT id, status, version, error, created_at, finished_at, json_extract(result_json, \'$.verdict\') AS verdict FROM material_runs WHERE case_id = ? ORDER BY id DESC');
 const listFiles = db.prepare('SELECT * FROM material_files WHERE case_id = ? AND active = 1 ORDER BY id');
+const caseContents = db.prepare('SELECT 1 FROM material_files WHERE case_id = ? UNION ALL SELECT 1 FROM material_runs WHERE case_id = ? LIMIT 1');
+const canEdit = (user: PublicUser, row: MaterialCaseRow) => row.user_id === user.id || fullAccess(user);
 
 function findCase(req: Request, res: Response, write = false) {
   const row = db.prepare('SELECT * FROM material_cases WHERE id = ?').get(id.parse(req.params.caseId)) as MaterialCaseRow | undefined;
@@ -38,12 +40,12 @@ function findCase(req: Request, res: Response, write = false) {
     res.status(404).json({ error: '送检档案不存在' });
     return;
   }
-  if (write && row.user_id !== req.user!.id && !fullAccess(req.user!)) {
+  if (write && !canEdit(req.user!, row)) {
     res.status(403).json({ error: '只有建档人或全院管理人员可修改档案' });
     return;
   }
   if (write && db.prepare("SELECT 1 FROM material_runs WHERE case_id = ? AND status IN ('queued', 'running')").get(row.id)) {
-    res.status(409).json({ error: '正在检查，等待结束后再修改材料' });
+    res.status(409).json({ error: '正在排队或检查，请等待结束后再修改或删除档案' });
     return;
   }
   return { row, scope };
@@ -88,7 +90,8 @@ materialsRouter.get('/', (req, res) => {
   const rows = db.prepare('SELECT * FROM material_cases ORDER BY id DESC').all() as MaterialCaseRow[];
   res.json(rows.flatMap((r) => {
     const scope = JSON.parse(r.scope_json) as MaterialScope;
-    return canAccessMaterial(req.user!, scope, r.user_id) ? [{ id: r.id, scope, createdAt: r.created_at, latest: listRuns.get(r.id) ?? null }] : [];
+    return canAccessMaterial(req.user!, scope, r.user_id) ? [{ id: r.id, scope, createdAt: r.created_at,
+      editable: canEdit(req.user!, r), scopeLocked: !!caseContents.get(r.id, r.id), latest: listRuns.get(r.id) ?? null }] : [];
   }).slice(0, 200));
 });
 
@@ -112,11 +115,48 @@ materialsRouter.get('/:caseId', (req, res) => {
   const expected = availableMaterials(entry.scope, supplied);
   res.json({
     id: entry.row.id, scope: entry.scope, version: materialVersion, expected, optional: optionalMaterials(entry.scope, expected),
-    editable: entry.row.user_id === req.user!.id || fullAccess(req.user!),
+    editable: canEdit(req.user!, entry.row), scopeLocked: !!caseContents.get(entry.row.id, entry.row.id),
     plan: plan ? { name: plan.name } : null,
     files: files.map((f) => ({ id: f.id, type: f.type, name: f.file_name, grade: GRADE_TYPES.includes(f.type) && !!f.pages_json })),
     runs: listRuns.all(entry.row.id),
   });
+});
+
+materialsRouter.put('/:caseId', (req, res) => {
+  const entry = findCase(req, res, true);
+  if (!entry) return;
+  const scope = materialScopeSchema.parse(req.body);
+  if (scope.level !== entry.scope.level) return res.status(400).json({ error: '建档后不能更改检查范围' });
+  const locked = !!caseContents.get(entry.row.id, entry.row.id);
+  if (scope.level === 'course') scope.group = locked ? entry.scope.group : courseGroup(scope);
+  if (locked && (scope.major !== entry.scope.major || scope.group !== entry.scope.group)) {
+    return res.status(409).json({ error: '已有附件或检查记录，不能更改所属专业或课程组' });
+  }
+  if (!canAccessMaterial(req.user!, scope)) return res.status(403).json({ error: '没有此专项复核的权限' });
+  const next = JSON.stringify(scope);
+  if (next !== entry.row.scope_json) {
+    db.prepare("UPDATE material_cases SET scope_json = ?, verifications_json = '{}' WHERE id = ?").run(next, entry.row.id);
+    audit(req.user, '编辑材料检查档案', String(entry.row.id), scope.title, req.ip);
+  }
+  res.json({ ok: true });
+});
+
+materialsRouter.delete('/:caseId', (req, res) => {
+  const entry = findCase(req, res, true);
+  if (!entry) return;
+  const caseId = entry.row.id;
+  const files = db.prepare('SELECT file_path FROM material_files WHERE case_id = ?').all(caseId) as { file_path: string }[];
+  db.transaction(() => {
+    db.prepare(`INSERT INTO deleted_material_check_usage (user_id, quota_date, amount)
+      SELECT user_id, date(finished_at), COUNT(*) FROM material_runs
+      WHERE case_id = ? AND status = 'done' AND date(finished_at) = date('now','localtime')
+      GROUP BY user_id, date(finished_at)
+      ON CONFLICT(user_id, quota_date) DO UPDATE SET amount = deleted_material_check_usage.amount + excluded.amount`).run(caseId);
+    db.prepare('DELETE FROM material_cases WHERE id = ?').run(caseId);
+  })();
+  files.forEach((file) => removeFile(file.file_path));
+  audit(req.user, '删除材料检查档案', String(caseId), `删除 ${files.length} 个附件及档案检查结果`, req.ip);
+  res.json({ ok: true });
 });
 
 materialsRouter.post('/:caseId/files', singleUpload([...extensions]), (req, res) => {

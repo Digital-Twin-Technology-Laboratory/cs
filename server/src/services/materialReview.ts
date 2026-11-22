@@ -236,7 +236,10 @@ export async function reviewMaterials(scope: MaterialScope, input: MaterialInput
         ? '已查可用原文；仍有材料、受保护的明细或未提供给模型的部分待核对' : item.detail);
     }
   }
-  const rules = results.map(({ rule, applies, materials }) => {
+  const rules = results.map(({ rule, applies, pendingAssessment, materials }) => {
+    if (pendingAssessment) return { code: rule.code, title: rule.title, materials: [],
+      status: '需核实' as const, findings: [{ status: '需核实' as const, location: '',
+        detail: '尚未填写考核形式，无法判断本项是否适用。请在编辑档案的补充检查设置中确认。' }] };
     if (!applies) return { code: rule.code, title: rule.title, materials: rule.materials.map((m) => m.name),
       status: '不适用' as const, findings: [] };
     const findings = notes.get(rule.code) ?? [{ status: '需核实' as const, location: '', detail: '暂无可用核查依据' }];

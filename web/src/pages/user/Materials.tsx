@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Checkbox, Col, Collapse, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Table, Tabs, Tag } from 'antd';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, download } from '../../api';
@@ -19,8 +20,9 @@ type Scope = { level: keyof typeof levels; title: string; term: string; section:
   planGrade: number; teaching: keyof typeof teaching; assessments: string[]; flags: string[]; rounding: keyof typeof roundings };
 type Run = { id: number; status: keyof typeof statusNames; error: string | null; version: string;
   created_at: string; verdict: keyof typeof verdictNames | null };
+type CaseRecord = { id: number; scope: Scope; editable: boolean; scopeLocked: boolean };
 type Attached = { id: number; name: string; type: string; grade: boolean };
-type Detail = { id: number; scope: Scope; version: string; expected: string[]; optional: string[]; editable: boolean;
+type Detail = CaseRecord & { version: string; expected: string[]; optional: string[];
   plan: { name: string } | null; files: Attached[]; runs: Run[] };
 type Picklists = { flags: Record<string, string>; majors: string[]; programs: readonly string[]; groups: string[]; college: boolean };
 type GradeRow = { location: string; line: number; cells: Record<string, string>; uncertain: string[]; ocr: boolean };
@@ -38,75 +40,158 @@ export default function Materials() {
 }
 
 function CaseList() {
-  const [settings, setSettings] = useState<Picklists>();
-  const [data, setData] = useState<{ id: number; scope: Scope; latest: Run | null }[]>([]);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [form] = Form.useForm<Scope>();
-  const level = Form.useWatch('level', form) ?? 'course';
+  const [data, setData] = useState<(CaseRecord & { latest: Run | null })[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editor, setEditor] = useState<CaseRecord | 'new'>();
   const nav = useNavigate();
   const { message } = App.useApp();
-  useEffect(() => {
-    Promise.all([api.get<Picklists>(`${base}/options`), api.get<typeof data>(base)])
-      .then(([picklists, records]) => { setSettings(picklists); setData(records); }).catch((e) => message.error(e.message));
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setData(await api.get<typeof data>(base)); }
+    catch (e) { message.error((e as Error).message); }
+    finally { setLoading(false); }
   }, [message]);
-  const levelOptions = choices(levels).filter(({ value }) => value === 'course' || (value === 'program' ? settings?.programs.length
-    : value === 'group' ? settings?.groups.length : settings?.college));
+  useEffect(() => { void load(); }, [load]);
   return <div className="page">
     <div className="page-head">
       <div><h1>全套教学材料检查</h1><div className="sub">按课程、学期和教学班送检，也可查专业、课程组或学院的专项材料。</div></div>
-      <Button type="primary" disabled={!settings} onClick={() => { form.resetFields(); setOpen(true); }}>新建送检档案</Button>
+      <Button type="primary" onClick={() => setEditor('new')}>新建送检档案</Button>
     </div>
     <Card>
-      <Table rowKey="id" dataSource={data} loading={!settings} scroll={{ x: 680 }} pagination={{ pageSize: 12 }} columns={[
+      <Table rowKey="id" dataSource={data} loading={loading} scroll={{ x: 860 }} pagination={{ pageSize: 12 }} columns={[
         { title: '送检档案', render: (_, r) => <Link to={`/materials/${r.id}`}>{r.scope.title}</Link> },
         { title: '范围', render: (_, r) => levels[r.scope.level] },
         { title: '学期／教学班', render: (_, r) => [r.scope.term, r.scope.section].filter(Boolean).join(' · ') },
         { title: '最近检查', render: (_, r) => r.latest ? r.latest.verdict ? verdictNames[r.latest.verdict] : statusNames[r.latest.status] : '未检查' },
+        { title: '操作', width: 180, fixed: 'right', render: (_, r) => {
+          const active = r.latest?.status === 'queued' || r.latest?.status === 'running';
+          return <Space size={0}>
+            <Button type="link" onClick={() => nav(`/materials/${r.id}`)}>查看</Button>
+            {r.editable && <>
+              <Button type="link" disabled={active} onClick={() => setEditor(r)}>编辑</Button>
+              <CaseDelete entry={r} link disabled={active} onDeleted={load} />
+            </>}
+          </Space>;
+        } },
       ]} />
     </Card>
-    <Modal title="新建送检档案" width={760} open={open} destroyOnHidden onCancel={() => setOpen(false)} okText="建档并上传" confirmLoading={busy} onOk={() => form.submit()}>
-      <Form form={form} layout="vertical" initialValues={{ level: 'course', teaching: 'theory', rounding: 'unknown', planGrade: 2025, flags: ['coursework', 'textbook'] }}
+    {editor && <CaseEditor entry={editor === 'new' ? undefined : editor} onClose={() => setEditor(undefined)}
+      onSaved={(id) => {
+        setEditor(undefined);
+        if (editor === 'new') nav(`/materials/${id}`);
+        else void load();
+      }} />}
+  </div>;
+}
+
+function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: () => void; onSaved: (id: number) => void }) {
+  const [settings, setSettings] = useState<Picklists>();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [form] = Form.useForm<Scope>();
+  const level = Form.useWatch('level', form) ?? entry?.scope.level ?? 'course';
+  const teachingType = Form.useWatch('teaching', form) ?? entry?.scope.teaching;
+  const formats = Form.useWatch('assessments', form) ?? entry?.scope.assessments ?? [];
+  const { message } = App.useApp();
+  useEffect(() => {
+    api.get<Picklists>(`${base}/options`).then(setSettings).catch((e) => setError(e.message));
+  }, []);
+  const levelOptions = choices(levels).filter(({ value }) => value === entry?.scope.level || value === 'course' || (value === 'program' ? settings?.programs.length
+    : value === 'group' ? settings?.groups.length : settings?.college));
+  const flagOptions = choices(settings?.flags ?? {}).filter(({ value }) => {
+    if (level === 'program') return value === 'mockProgram';
+    if (level === 'group') return value === 'examReview2024';
+    if (value === 'labHours') return teachingType === 'practice';
+    if (['separateLab', 'fiveReports', 'labReview'].includes(value)) return teachingType === 'practice' || teachingType === 'mixed';
+    if (['twoPapers', 'paperAnswers'].includes(value)) return formats.includes('written');
+    return !['mockProgram', 'examReview2024'].includes(value);
+  });
+  return <Modal title={entry ? '编辑档案' : '新建送检档案'} width={720} open onCancel={onClose}
+    okText={entry ? '保存修改' : '建档并上传'} confirmLoading={busy} okButtonProps={{ disabled: !settings }} onOk={() => form.submit()}>
+      {error && <Alert type="error" message={error} />}
+      <Spin spinning={!settings && !error}>
+      <Form form={form} layout="vertical" initialValues={entry?.scope ?? { level: 'course', rounding: 'unknown', planGrade: 2025 }}
         onFinish={async (values) => {
           setBusy(true);
-          try { const record = await api.post<{ id: number }>(base, values); nav(`/materials/${record.id}`); }
-          catch (e) { message.error((e as Error).message); } finally { setBusy(false); }
+          try {
+            if (entry) {
+              await api.put(`${base}/${entry.id}`, { ...entry.scope, ...values });
+              message.success('档案已保存，已有检查报告不变');
+              onSaved(entry.id);
+            } else {
+              const { id } = await api.post<{ id: number }>(base, values);
+              onSaved(id);
+            }
+          } catch (e) { message.error((e as Error).message); }
+          finally { setBusy(false); }
         }}>
-        <Form.Item name="level" label="检查范围" rules={[{ required: true }]}><Select options={levelOptions} /></Form.Item>
+        <Form.Item name="level" label="检查范围" rules={[{ required: true }]}><Select disabled={!!entry} options={levelOptions} /></Form.Item>
         <Row gutter={16}>
           <Col xs={24} sm={12}><Form.Item name="title" label={level === 'course' ? '课程名称' : '复核名称'} rules={[{ required: true }]}><Input maxLength={120} /></Form.Item></Col>
           <Col xs={24} sm={12}><Form.Item name="term" label="学年学期／复核时段" rules={[{ required: true }]}><Input placeholder="例如 2025-2026 第2学期" maxLength={120} /></Form.Item></Col>
         </Row>
         {(level === 'course' || level === 'program') && <Row gutter={16}>
-          <Col xs={24} sm={12}><Form.Item name="major" label="专业" rules={[{ required: true }]}><Select options={options([...(level === 'course' ? settings?.majors ?? [] : settings?.programs ?? [])])} /></Form.Item></Col>
+          <Col xs={24} sm={12}><Form.Item name="major" label="专业" rules={[{ required: true }]}>
+            <Select disabled={entry?.scopeLocked} options={options([...(level === 'course' ? settings?.majors ?? [] : settings?.programs ?? [])])} />
+          </Form.Item></Col>
           <Col xs={24} sm={12}><Form.Item name="planGrade" label="对照培养方案年级"><InputNumber min={2000} max={2100} style={{ width: '100%' }} /></Form.Item></Col>
         </Row>}
-        {level === 'group' && <Form.Item name="group" label="课程组" rules={[{ required: true }]}><Select options={options(settings?.groups ?? [])} /></Form.Item>}
-        {level === 'course' && <>
-          <Row gutter={16}>
-            <Col xs={24} sm={12}><Form.Item name="section" label="教学班" rules={[{ required: true }]}><Input maxLength={120} placeholder="填写班号或合班名称" /></Form.Item></Col>
-            <Col xs={24} sm={12}><Form.Item name="teaching" label="授课类型"><Select options={choices(teaching)} /></Form.Item></Col>
-          </Row>
-          <Form.Item name="assessments" label="实际考核形式" rules={[{ required: true, type: 'array', min: 1 }]}><Checkbox.Group options={choices(assessments)} /></Form.Item>
-          <Form.Item name="rounding" label="总评取整规则" extra="仅当分项是百分制原始分，且按总评权重加权时选取整方式；否则选未确认。"><Select options={choices(roundings)} /></Form.Item>
-        </>}
-        {level !== 'college' && <Form.Item name="flags" label="适用情形" extra="按实际情况勾选；不要把未送检当作不适用。">
-          <Checkbox.Group options={choices(settings?.flags ?? {}).filter(({ value }) => level === 'program' ? value === 'mockProgram'
-            : level === 'group' ? value === 'examReview2024' : !['mockProgram', 'examReview2024'].includes(value))} />
-        </Form.Item>}
+        {level === 'group' && <Form.Item name="group" label="课程组" rules={[{ required: true }]}><Select disabled={entry?.scopeLocked} options={options(settings?.groups ?? [])} /></Form.Item>}
+        {level === 'course' && <Row gutter={16}>
+          <Col xs={24} sm={12}><Form.Item name="section" label="教学班" rules={[{ required: true }]}><Input maxLength={120} placeholder="填写班号或合班名称" /></Form.Item></Col>
+          <Col xs={24} sm={12}><Form.Item name="teaching" label="授课类型" rules={[{ required: true, message: '请选择授课类型' }]}
+            extra="决定是否检查实验或实践材料。"><Select placeholder="请选择授课类型" options={choices(teaching)} /></Form.Item></Col>
+        </Row>}
+        {level !== 'college' && <Collapse items={[{
+          key: 'checks', label: '补充检查设置（选填）', forceRender: true, children: <>
+            {level === 'course' && <>
+              <Form.Item name="assessments" label="考核形式" extra="用于确认是否查试卷、机考、项目或报告。不确定可先送检，相关项留待核实。">
+                <Checkbox.Group options={choices(assessments)} />
+              </Form.Item>
+              <Form.Item name="rounding" label="总评取整方式" extra="仅用于复算按百分制原始分加权的总评；不确定时不复算。">
+                <Select options={choices(roundings)} />
+              </Form.Item>
+            </>}
+            <Form.Item name="flags" label={level === 'course' ? '还需检查哪些内容' : '专项检查条件'}
+              extra={level === 'course' ? '例如勾选「另设实验成绩表」，系统才会把独立实验成绩表列为应交。' : undefined}>
+              <Checkbox.Group options={flagOptions} />
+            </Form.Item>
+          </>,
+        }]} />}
+        {entry?.scopeLocked && (level === 'course' || level === 'program' || level === 'group') &&
+          <div className="muted" style={{ marginTop: 12 }}>已有附件或检查记录，不能更改所属专业或课程组；其他修改在下次检查时生效。</div>}
       </Form>
-    </Modal>
-  </div>;
+      </Spin>
+  </Modal>;
+}
+
+function CaseDelete({ entry, disabled, link, onDeleted }: { entry: CaseRecord; disabled: boolean; link?: boolean; onDeleted: () => void }) {
+  const { message } = App.useApp();
+  return <Popconfirm title={`删除「${entry.scope.title}」？`}
+    description="档案、全部附件和历史检查报告都会删除，无法恢复。已用检查次数不退回。"
+    okText="确认删除" cancelText="取消" okButtonProps={{ danger: true }} disabled={disabled}
+    onConfirm={async () => {
+      try {
+        await api.del(`${base}/${entry.id}`);
+        message.success('已删除送检档案');
+        onDeleted();
+      } catch (e) { message.error((e as Error).message); }
+    }}>
+    <Button danger type={link ? 'link' : 'default'} disabled={disabled}>删除</Button>
+  </Popconfirm>;
 }
 
 function CaseDetail({ id }: { id: string }) {
   const url = `${base}/${id}`;
   const { message } = App.useApp();
+  const nav = useNavigate();
+  const back = () => nav('/materials');
   const [entry, setEntry] = useState<Detail>();
   const [error, setError] = useState('');
   const [runId, setRunId] = useState<number>();
   const [result, setResult] = useState<Result | null>(null);
   const [pending, setPending] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [type, setType] = useState<string>();
   const [upload, setUpload] = useState<File[]>([]);
   const [picker, setPicker] = useState(0);
@@ -116,6 +201,7 @@ function CaseDetail({ id }: { id: string }) {
   const fetchCase = useCallback(async () => {
     const detail = await api.get<Detail>(url);
     setEntry(detail);
+    setType((old) => old && (detail.expected.includes(old) || detail.optional.includes(old)) ? old : undefined);
     setRunId((old) => old ?? detail.runs[0]?.id);
   }, [url]);
   useEffect(() => { fetchCase().catch((e) => setError(e.message)); }, [fetchCase]);
@@ -144,23 +230,31 @@ function CaseDetail({ id }: { id: string }) {
     catch (e) { message.error((e as Error).message); }
     finally { setPending(false); }
   }
-  if (error) return <div className="page"><Alert type="error" message={error} /><Link to="/materials">返回档案列表</Link></div>;
+  const backButton = <Button icon={<ArrowLeftOutlined />} onClick={back} style={{ marginBottom: 16 }}>返回档案列表</Button>;
+  if (error) return <div className="page">{backButton}<Alert type="error" message={error} /></div>;
   if (!entry) return <div className="page"><Spin /></div>;
   const { scope } = entry;
   const readonly = !entry.editable || active;
   return <div className="page">
+    {backButton}
     <div className="page-head">
-      <div><Link to="/materials">全套材料档案</Link><h1>{scope.title}</h1>
+      <div><h1>{scope.title}</h1>
         <div className="sub">{[levels[scope.level], scope.term, scope.section, scope.major, scope.group, scope.level === 'course' && teaching[scope.teaching]].filter(Boolean).join(' · ')}</div>
       </div>
-      {entry.editable && <Button type="primary" disabled={active || !entry.files.length} loading={pending}
-        onClick={() => perform(async () => { const r = await api.post<{ id: number }>(`${url}/runs`); setRunId(r.id); })}>
-        {latest ? '重新检查当前材料' : '开始检查'}
-      </Button>}
+      {entry.editable && <Space wrap>
+        <Button disabled={active || pending} onClick={() => setEditing(true)}>编辑档案</Button>
+        <CaseDelete entry={entry} disabled={active || pending} onDeleted={back} />
+        <Button type="primary" disabled={active || !entry.files.length} loading={pending}
+          onClick={() => perform(async () => { const r = await api.post<{ id: number }>(`${url}/runs`); setRunId(r.id); })}>
+          {latest ? '重新检查当前材料' : '开始检查'}
+        </Button>
+      </Space>}
     </div>
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card title="本次送检材料" extra={<Tag>规则 {entry.version}</Tag>}>
         <Alert type="info" showIcon message="可以先检查已上传的材料。应交未上传记为待补，不适用不记缺失。" />
+        {scope.level === 'course' && !scope.assessments.length &&
+          <div className="muted" style={{ marginTop: 8 }}>未填写考核形式不影响送检；相关检查会标为「需核实」，可在「编辑档案」中补充。</div>}
         {entry.editable && <Space wrap style={{ margin: '14px 0' }}>
           <Select aria-label="材料类型" placeholder="选择材料类型" disabled={readonly} showSearch value={type} onChange={setType}
             style={{ minWidth: 260 }} options={options([...entry.expected, ...entry.optional])} />
@@ -207,6 +301,10 @@ function CaseDetail({ id }: { id: string }) {
         </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有检查结果" />}
       </Card>
     </Space>
+    {editing && <CaseEditor entry={entry} onClose={() => setEditing(false)} onSaved={() => {
+      setEditing(false);
+      void fetchCase().catch((e) => message.error(e.message));
+    }} />}
     {editGrade && <GradeDialog url={`${url}/files/${editGrade.id}`} file={editGrade} readonly={readonly} onClose={() => setEditGrade(undefined)} />}
     <Modal open={!!verify} title={verify ? `人工核实 · ${verify.title}` : ''} onCancel={() => setVerify(undefined)}
       onOk={() => verifyForm.submit()} okText="保存核实意见" confirmLoading={pending}>
@@ -264,7 +362,7 @@ function ResultView({ url, result, onVerify }: { url: string; result: Result; on
               <Tag color={colors[f.status]}>{f.status}</Tag>{f.detail}
               {f.location && <div className="muted" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 4 }}>{f.location}</div>}
             </div>)}
-            {r.status === '需核实' && onVerify && <Button onClick={() => onVerify(r)}>记录人工核实</Button>}
+            {r.status === '需核实' && !!r.materials.length && onVerify && <Button onClick={() => onVerify(r)}>记录人工核实</Button>}
           </Space>,
         }))} />
       </Space> },

@@ -108,19 +108,27 @@ test('course and college material checks preserve scope, quantified differences,
     ['1', '202600101', '隐私样例', '80', '90', '86', ''],
     ['2', '202600102', '隐私样例二', '0', '60', '36', ''],
   ]);
-  const newCase = await teacher(base, scope);
+  const newCase = await teacher(base, { ...scope, assessments: [] });
   assert.equal(newCase.status, 201);
   const course = `${base}/${newCase.data.id}`;
+  const draft = (await teacher(course)).data;
+  assert.equal(draft.scopeLocked, false);
+  assert.ok(!draft.expected.includes('命题双向细目表'));
+  assert.ok(draft.optional.includes('命题双向细目表'));
   const gradeId = await add(teacher, course, '课程成绩单', grade, '正式成绩.docx');
   const first = await check(teacher, course);
   assert.equal(first.result.rules.length, 104);
   assert.equal(first.result.verdict, 'partial');
   assert.equal(first.result.rules.find((r) => r.code === 'C025').status, '不适用');
+  assert.equal(first.result.rules.find((r) => r.code === 'C053').status, '需核实');
   assert.deepEqual(first.result.stats[0].stats[0].bands, [1, 0, 0, 1, 0]);
   const { data: gradeTable } = await teacher(`${course}/files/${gradeId}/grades`);
   assert.equal(gradeTable.rows[1].cells.平时, '0');
   assert.equal(gradeTable.rows[0].cells.学号, '202600101');
 
+  assert.equal((await teacher(course, { ...scope, major: '人工智能' }, 'PUT')).status, 409);
+  assert.equal((await teacher(course, { ...scope, title: '程序设计（已编辑）' }, 'PUT')).status, 200);
+  assert.equal((await teacher(course)).data.scope.title, '程序设计（已编辑）');
   await add(teacher, course, '课程教学大纲', await word(['课程教学大纲：程序设计', '总评成绩比例：平时：30%，期末：70%']), '大纲.docx');
   const second = await check(teacher, course);
   const discrepancy = second.result.rules.find((r) => r.code === 'C023');
@@ -129,6 +137,9 @@ test('course and college material checks preserve scope, quantified differences,
   assert.ok(discrepancy.findings.some((f) => /30% 与 40%/.test(f.detail) && /大纲\.docx.*正式成绩\.docx/.test(f.location)));
   const firstAgain = await teacher(`${course}/runs/${first.id}`);
   assert.deepEqual(firstAgain.data.result, first.result);
+  const oldReport = await teacher(`${course}/runs/${first.id}/report.docx`);
+  const oldXml = await (await JSZip.loadAsync(oldReport.data)).file('word/document.xml').async('string');
+  assert.doesNotMatch(oldXml, /已编辑/);
   const docx = await teacher(`${course}/runs/${second.id}/report.docx`);
   const xml = await (await JSZip.loadAsync(docx.data)).file('word/document.xml').async('string');
   assert.match(xml, /按材料查/);
@@ -164,10 +175,18 @@ test('course and college material checks preserve scope, quantified differences,
   assert.equal(review.result.rules.find((r) => r.code === 'C095').status, '需整改');
   assert.equal(review.result.rules.find((r) => r.code === 'C025').status, '不适用');
   assert.equal((await teacher(college)).status, 404);
+  assert.equal((await teacher(college, undefined, 'DELETE')).status, 404);
   assert.equal((await teacher(`${college}/files/${privateId}/original`)).status, 404);
   assert.equal((await teacher(`${college}/runs/${review.id}/report.docx`)).status, 404);
   assert.ok(modelRequests.length > 0);
   assert.doesNotMatch(JSON.stringify(modelRequests), /隐私样例|20260010[12]|正式成绩\.docx/);
+  const list = (await teacher(base)).data;
+  assert.ok(list.some((r) => r.id === newCase.data.id && r.editable && r.scopeLocked));
+  assert.equal((await teacher(course, undefined, 'DELETE')).status, 200);
+  assert.equal((await teacher(course)).status, 404);
+  assert.equal((await teacher(`${course}/files/${gradeId}/original`)).status, 404);
+  assert.equal((await teacher(`${course}/runs/${first.id}/report.docx`)).status, 404);
+  assert.equal((await teacher('/api/auth/me')).data.checkQuota.used, originalQuota.used + 4);
 });
 
 test('provided phone picture and image-only PDF: rotate without mixing scores, keep zero and dash distinct', {
