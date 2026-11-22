@@ -387,7 +387,70 @@ mark.hl {
   line-height: 1.6;
 }
 
+.material-history-search {
+  row-gap: 8px;
+}
+.material-history-hint {
+  margin: 0 0 12px;
+}
+.material-history-loading {
+  padding: 24px 0;
+  text-align: center;
+}
+.material-history-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  overflow-wrap: anywhere;
+}
+.material-history-meta {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.material-history-meta:empty {
+  display: none;
+}
+.material-history-issues {
+  margin: 0;
+  padding-inline-start: 22px;
+}
+.material-history-issue {
+  padding: 12px 0;
+}
+.material-history-issue + .material-history-issue {
+  border-top: 1px solid #e9ebef;
+}
+.material-history-issue::marker {
+  color: #646a73;
+}
+.material-history-issue summary {
+  color: #1f4e8c;
+  cursor: pointer;
+  width: fit-content;
+}
+.material-history-reading,
+.material-history-reading.ant-typography {
+  max-inline-size: 56em;
+  margin: 4px 0 6px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.material-history-action {
+  padding: 6px 10px;
+  background: #f3f6fa;
+  border-inline-start: 2px solid #1f4e8c;
+}
+.material-history-pagination {
+  margin-top: 16px;
+}
+
 @media (max-width: 768px) {
+  .material-history-search .ant-form-item {
+    width: 100%;
+    margin-inline-end: 0;
+  }
   .page {
     padding: 16px 12px;
   }

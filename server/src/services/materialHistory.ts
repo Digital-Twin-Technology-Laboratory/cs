@@ -12,12 +12,15 @@ type Feedback = {
 };
 export type HistoryIssue = Feedback & {
   id: string; course: HistoryCourse; uploader: string; date: string; outline?: true; submissionId?: number;
+  outlineDetail?: Pick<CheckResult['issues'][number], 'title' | 'problem' | 'advice' | 'evidence'>;
 };
+export type HistoryKind = 'history' | 'outline';
 type ImportRow = Feedback & { key: string; row: number; sheet: string; course: HistoryCourse };
 export type HistoryPreviewRow = ImportRow & { status: 'matched' | 'ambiguous' | 'unmatched' | 'invalid'; candidates: HistoryCourse[] };
 
 const clean = (value: unknown) => String(value ?? '').trim();
 const normalize = (value: string) => value.normalize('NFKC').trim().toLowerCase();
+const termKey = (term: string) => normalize(term).replace(/[‐‑–—]/g, '-');
 const names = (value: string) => value.split(/[、,，;；\n]+/).map((s) => s.trim()).filter(Boolean);
 const majorAliases = new Map([['计算机公共教学', '公共'], ['专转本', '计算机科学与技术（专转本）'],
   ['中外物联网', '物联网工程（中外合作）'], ['物联网工程（合作办学）', '物联网工程（中外合作）']]);
@@ -144,7 +147,7 @@ export function importHistory(rows: HistoryPreviewRow[], choices: Record<string,
   const source = `${user.name || user.username}（${user.username}）`;
   const catalog = uniqueCourses([...courses.values(), ...confirmed.map(({ course }) => course)]);
   const fingerprint = (course: HistoryCourse, feedback: Feedback) =>
-    JSON.stringify([courseKey(canonicalCourse(course, catalog)), normalize(feedback.term).replace(/[‐‑–—]/g, '-'),
+    JSON.stringify([courseKey(canonicalCourse(course, catalog)), termKey(feedback.term),
       normalize(feedback.context), feedback.text.trim(), feedback.source]);
   type Payload = Feedback & { uploader: string };
   const stored = db.prepare('SELECT issue_key, course_name AS name, course_code AS code, major, payload FROM material_history')
@@ -222,11 +225,29 @@ export function historyIssues(user: PublicUser, filters: { course?: string; teac
       source: row.file_name, date: row.date, term: '', context: '', outline: true as const,
       submissionId: all || row.user_id === user.id ? row.id : undefined };
     issues.push(...result.issues.map((item, i) => ({ ...base, id: `syllabus:${row.id}:${i}`,
-      text: [item.title, item.problem, item.advice].filter(Boolean).join('\n'), position: item.location, nature: item.nature })),
+      text: [item.title, item.problem, item.advice].filter(Boolean).join('\n'), position: item.location, nature: item.nature,
+      outlineDetail: { title: item.title, problem: item.problem, advice: item.advice, evidence: item.evidence } })),
     ...result.toVerify.map((item, i) => ({ ...base, id: `verify:${row.id}:${i}`,
       text: item.content, position: item.location, nature: '需核实' })));
   }
   return issues.sort((a, b) => (b.term || b.date).localeCompare(a.term || a.date) || b.date.localeCompare(a.date));
+}
+
+export function groupHistoryIssues(rows: HistoryIssue[], selected: HistoryKind, page: number) {
+  const counts = { history: 0, outline: 0 };
+  const groups = new Map<string, HistoryIssue[]>();
+  for (const row of rows) {
+    const kind = row.outline ? 'outline' : 'history';
+    counts[kind]++;
+    if (kind !== selected) continue;
+    // Both syllabus ID formats (issue and verify) have the same original check ID.
+    const key = row.outline ? row.id.split(':')[1] : JSON.stringify([courseKey(row.course), termKey(row.term)]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+  const pageSize = 6;
+  return { counts, total: groups.size, pageSize, groups: [...groups].slice((page - 1) * pageSize, page * pageSize)
+    .map(([id, issues]) => ({ id, issues })) };
 }
 
 export function courseHistory(user: PublicUser, scope: MaterialScope) {

@@ -22,7 +22,8 @@ type CaseRecord = { id: number; scope: Scope; editable: boolean; scopeLocked: bo
 type Attached = { id: number; name: string; type: string; grade: boolean };
 type Detail = CaseRecord & { version: string; expected: string[]; optional: string[];
   plan: { name: string } | null; files: Attached[]; runs: Run[] };
-type Picklists = { majors: string[]; programs: readonly string[]; groups: string[]; college: boolean; courses: HistoryCourse[] };
+type Picklists = { majors: string[]; programs: readonly string[]; groups: string[]; college: boolean;
+  courses: HistoryCourse[]; teachingClasses: (HistoryCourse & { section: string })[] };
 type GradeRow = { location: string; line: number; cells: Record<string, string>; uncertain: string[]; ocr: boolean };
 type GradeEdit = { location: string; line: number; column: string; value: string };
 type GradeData = { rows: GradeRow[]; edits: GradeEdit[]; weights: Record<string, number>; weightEdits: Record<string, number> | null;
@@ -106,16 +107,27 @@ function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: 
   const [settings, setSettings] = useState<Picklists>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [manualSection, setManualSection] = useState(!entry?.scope.section);
   const [form] = Form.useForm<Scope>();
   const level = Form.useWatch('level', form) ?? entry?.scope.level ?? 'course';
   const courseCode = Form.useWatch('courseCode', form);
+  const title = Form.useWatch('title', form);
+  const section = Form.useWatch('section', form);
   const { message } = App.useApp();
   useEffect(() => {
     api.get<Picklists>(`${base}/options`).then(setSettings).catch((e) => setError(e.message));
   }, []);
   const levelOptions = choices(levels).filter(({ value }) => value === entry?.scope.level || value === 'course' || (value === 'program' ? settings?.programs.length
     : value === 'group' ? settings?.groups.length : settings?.college));
-  const courseOptions = settings?.courses.map((course) => ({ value: course.key, label: courseLabel(course), course }));
+  const available = (course: HistoryCourse) => !entry?.scopeLocked || !course.major || course.major === entry.scope.major;
+  const courseOptions = [
+    ...(settings?.teachingClasses ?? []).filter(available).map((course) => ({
+      value: course.key, label: `${course.section} · ${courseLabel(course)}`, course, section: course.section,
+    })),
+    ...(settings?.courses ?? []).filter(available).map((course) => ({
+      value: course.key, label: `${courseLabel(course)} · 手动填班`, course, section: '',
+    })),
+  ];
   return <Modal title={entry ? '编辑档案' : '新建送检档案'} width={720} open onCancel={onClose}
     okText={entry ? '保存修改' : '建档并上传'} confirmLoading={busy} okButtonProps={{ disabled: !settings }} onOk={() => form.submit()}>
       {error && <Alert type="error" message={error} />}
@@ -137,16 +149,27 @@ function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: 
         }}>
         <Form.Item name="level" label="检查范围" rules={[{ required: true }]}><Select disabled={!!entry} options={levelOptions} /></Form.Item>
         <Form.Item name="courseCode" hidden><Input /></Form.Item>
-        <Form.Item name="title" label={level === 'course' ? '课程' : '复核名称'}
-          extra={level === 'course' && courseCode ? `课程代码：${courseCode}` : undefined} rules={[{ required: true, whitespace: true }]}>
-          {level === 'course' ? <AutoComplete options={courseOptions} placeholder="按课程名称或代码选择，也可填写新课程名称"
+        <Form.Item name="title" label={level === 'course' ? '课程／教学班' : '复核名称'}
+          extra={level === 'course' && <Space size={8} wrap>
+            {section && !manualSection && <span>教学班：{section}
+              {' '}<Button type="link" size="small" onClick={() => setManualSection(true)}>改填教学班</Button></span>}
+            {courseCode && <span>课程代码：{courseCode}</span>}
+            {!title && <span>优先选已登记的教学班，也可手动补录。</span>}
+          </Space>} rules={[{ required: true, whitespace: true }]}>
+          {level === 'course' ? <AutoComplete options={courseOptions} placeholder="按教学班、课程名称或代码搜索"
             filterOption={(value, option) => !!option?.label.toLowerCase().includes(value.toLowerCase())}
-            onChange={() => form.setFieldValue('courseCode', '')}
-            onSelect={(_, { course }) => form.setFieldsValue({ title: course.name, courseCode: course.code,
-              ...(settings?.majors.includes(course.major) && !entry?.scopeLocked ? { major: course.major } : {}) })}>
+            onChange={() => { form.setFieldsValue({ courseCode: '', section: '' }); setManualSection(true); }}
+            onSelect={(_, { course, section }) => {
+              setManualSection(!section);
+              form.setFieldsValue({ title: course.name, courseCode: course.code, section,
+                ...(settings?.majors.includes(course.major) && !entry?.scopeLocked ? { major: course.major } : {}) });
+            }}>
             <Input maxLength={120} />
           </AutoComplete> : <Input maxLength={120} />}
         </Form.Item>
+        {level === 'course' && <Form.Item name="section" label="教学班" hidden={!manualSection || !title?.trim()}>
+          <Input maxLength={120} placeholder="填写实际教学班或合班名称" />
+        </Form.Item>}
         {(level === 'course' || level === 'program') && <Row gutter={16}>
           <Col xs={24} sm={12}><Form.Item name="major" label="专业" rules={[{ required: true }]}>
             <Select disabled={entry?.scopeLocked} options={options([...(level === 'course' ? settings?.majors ?? [] : settings?.programs ?? [])])} />

@@ -204,9 +204,14 @@ test('course and college material checks preserve scope, quantified differences,
 
   await t.test('whole-sheet preview, co-teacher lookup and optional evidence-backed recheck', async () => {
     const draft = { level: 'course', title: '复查测试课', courseCode: 'COURSE-01', major: scope.major };
-    const created = await admin(base, draft);
+    const created = await admin(base, { ...draft, section: '第12教学班' });
     assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.equal((await admin(base, { ...draft, section: '第3教学班' })).status, 201);
+    assert.equal((await admin(base, { ...draft, section: '第3教学班' })).status, 201);
     assert.equal((await admin(base, { ...draft, courseCode: 'COURSE-02', major: '人工智能' })).status, 201);
+    const visible = (await admin(`${base}/options`)).data.teachingClasses.filter((row) => row.code === draft.courseCode);
+    assert.deepEqual(visible.map((row) => [row.section, row.name]), [['第3教学班', draft.title], ['第12教学班', draft.title]]);
+    assert.ok(!(await teacher(`${base}/options`)).data.teachingClasses.some((row) => row.code === draft.courseCode));
     const endpoint = `${base}/${created.data.id}`;
     const history = `${base}/history`;
     const feedback = '教学大纲只写了权重范围。\n应明确平时与期末比例。';
@@ -268,6 +273,7 @@ test('course and college material checks preserve scope, quantified differences,
     assert.deepEqual(skipped.result.rules, reviewed.result.rules);
     assert.equal(skipped.result.history, undefined);
     assert.equal((await admin(endpoint)).data.scope.term, '2026-2027 第1学期');
+    assert.equal((await admin(endpoint)).data.scope.section, '第12教学班');
   });
 });
 

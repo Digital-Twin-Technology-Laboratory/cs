@@ -211,5 +211,34 @@ test('teacher issue history preserves findings and enforces teaching-only access
     const course = (await admin(`${base}?course=Historical+course+title`)).data;
     assert.ok(course.rows.some((row) => row.submissionId === old));
     assert.ok(course.rows.some((row) => row.submissionId !== old && !row.teachers.length));
+
+    database.prepare('UPDATE submissions SET result_json = ? WHERE id = ?')
+      .run(JSON.stringify({ ...severe, toVerify: verification.toVerify }), old);
+    const insert = database.prepare(`INSERT INTO material_history (issue_key, course_name, course_code, major, payload)
+      VALUES (?, 'Historical course title', '', ?, ?)`);
+    for (const [i, term] of ['2025-2026-1', '2025–2026-1', '2026-2027-1'].entries()) {
+      insert.run(`group-test:${i}`, programs[0], JSON.stringify({
+        term, text: `Feedback ${i}`, teachers: [{ name: 'empty', staffNo: 'empty' }], context: '',
+        source: 'Archive.xlsx', position: 'Sheet!B2', nature: '抽查记录', uploader: 'Root',
+      }));
+    }
+    const query = `${base}?teacher=empty&course=Historical+course+title`;
+    const archive = (await admin(`${query}&kind=history`)).data;
+    assert.deepEqual(archive.counts, { history: 3, outline: 2 });
+    assert.equal(archive.total, 2);
+    assert.deepEqual(archive.groups.map((group) => group.issues.length), [1, 2]);
+    assert.ok(archive.groups.every((group) => group.issues.every((row) => !row.outline)));
+    const outline = (await users.empty.request(`${query}&kind=outline`)).data;
+    assert.deepEqual(outline.counts, archive.counts);
+    assert.equal(outline.total, 1);
+    const [finding, verify] = outline.groups[0].issues;
+    assert.deepEqual(finding.outlineDetail, {
+      title: 'Assessment mismatch', problem: 'Weights total 120%', advice: 'Correct the weights', evidence: '60% + 60%',
+    });
+    assert.equal(finding.submissionId, undefined);
+    assert.equal(verify.nature, '需核实');
+    const secondPage = (await admin(`${base}?course=Historical+course+title&kind=outline&page=2`)).data;
+    assert.equal(secondPage.groups.length, secondPage.pageSize);
+    assert.ok(secondPage.groups.every((group) => group.issues.every((row) => row.outline)));
   });
 });

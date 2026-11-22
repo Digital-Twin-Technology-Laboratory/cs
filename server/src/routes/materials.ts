@@ -15,7 +15,7 @@ import { canAccessMaterial, filePages, fullAccess, type MaterialCaseRow, type Ma
 import type { MaterialResult } from '../services/materialReview.js';
 import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { GROUP_PRESETS } from '../services/supervisionRoles.js';
-import { canManageHistory, courseHistory, courseKey, historyCourses, historyIssues, importHistory, previewHistory } from '../services/materialHistory.js';
+import { canManageHistory, courseHistory, courseKey, groupHistoryIssues, historyCourses, historyIssues, importHistory, previewHistory } from '../services/materialHistory.js';
 
 export const materialsRouter = Router();
 materialsRouter.use(requireAuth);
@@ -92,19 +92,32 @@ materialsRouter.get('/options', (req, res) => {
   const groups = all ? [...new Set([...GROUP_PRESETS.map((g) => g.group), ...(
     db.prepare("SELECT DISTINCT course_group FROM outline_requirements WHERE course_group != '' ORDER BY course_group").all() as { course_group: string }[])
     .map((g) => g.course_group)])] : user.led_groups;
+  const teachingClasses = new Map<string, { key: string; section: string; name: string; major: string; code: string }>();
+  const cases = db.prepare(`SELECT user_id, scope_json FROM material_cases WHERE json_extract(scope_json, '$.level') = 'course'
+    AND json_extract(scope_json, '$.section') <> ''`).all() as Pick<MaterialCaseRow, 'user_id' | 'scope_json'>[];
+  for (const row of cases) {
+    const scope = JSON.parse(row.scope_json) as MaterialScope;
+    if (!canAccessMaterial(user, scope, row.user_id)) continue;
+    const course = { name: scope.title, code: scope.courseCode ?? '', major: scope.major, section: scope.section };
+    const key = JSON.stringify([course.section, course.major, courseKey(course)]);
+    teachingClasses.set(key, { ...course, key });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json({ flags, majors: [...new Set([...PLAN_MAJORS, ...user.program_scopes])],
     programs: all ? PLAN_MAJORS : user.program_scopes, groups, college: all,
-    courses: historyCourses().map((course) => ({ ...course, key: courseKey(course) })) });
+    courses: historyCourses().map((course) => ({ ...course, key: courseKey(course) })),
+    teachingClasses: [...teachingClasses.values()].sort((a, b) => a.section.localeCompare(b.section, 'zh-CN', { numeric: true })
+      || a.name.localeCompare(b.name, 'zh-CN')) });
 });
 
 materialsRouter.get('/history', (req, res) => {
-  const { course, teacher, page } = z.object({
+  const { course, teacher, page, kind } = z.object({
     course: z.string().trim().max(120).optional(), teacher: z.string().trim().max(120).optional(),
-    page: z.coerce.number().int().positive().default(1),
+    page: z.coerce.number().int().positive().default(1), kind: z.enum(['history', 'outline']).optional(),
   }).parse(req.query);
-  if (!course && !teacher) return res.json({ rows: [], total: 0 });
   res.setHeader('Cache-Control', 'private, no-store');
-  const rows = historyIssues(req.user!, { course, teacher });
+  const rows = course || teacher ? historyIssues(req.user!, { course, teacher }) : [];
+  if (kind) return res.json(groupHistoryIssues(rows, kind, page));
   res.json({ rows: rows.slice((page - 1) * 20, page * 20), total: rows.length });
 });
 
