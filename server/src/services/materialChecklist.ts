@@ -34,18 +34,19 @@ const assessmentForms = ['written', 'computer', 'project', 'report', 'other'] as
 export const materialScopeSchema = z.object({
   level: z.enum(['course', 'program', 'group', 'college']),
   title: label,
-  term: label,
+  courseCode: z.string().trim().max(120).default(''),
+  term: z.string().trim().max(120).default(''),
   section: z.string().trim().max(120).default(''),
   major: z.string().trim().max(120).default(''),
   group: z.string().trim().max(120).default(''),
   planGrade: z.coerce.number().int().min(2000).max(2100).default(2025),
-  teaching: z.enum(['theory', 'mixed', 'practice']).default('theory'),
+  teaching: z.enum(['unknown', 'theory', 'mixed', 'practice']).default('unknown'),
   assessments: z.array(z.enum(assessmentForms)).max(5).default([]),
   flags: z.array(z.enum(Object.keys(flags) as MaterialFlag[])).default([]),
   rounding: z.enum(['unknown', 'integer', 'oneDecimal', 'exact']).default('unknown'),
 }).superRefine((v, ctx) => {
-  if (v.level === 'course' && (!v.section || !v.major))
-    ctx.addIssue({ code: 'custom', message: '请选择专业并填写教学班' });
+  if (v.level === 'course' && !v.major)
+    ctx.addIssue({ code: 'custom', message: '请选择专业' });
   if (v.level === 'program' && !v.major) ctx.addIssue({ code: 'custom', message: '请选择复核专业' });
   if (v.level === 'group' && !v.group) ctx.addIssue({ code: 'custom', message: '请选择复核课程组' });
 });
@@ -69,8 +70,10 @@ export function ruleApplies(r: MaterialRule, s: MaterialScope, supplied: Set<str
   const exam = written || s.assessments.includes('computer');
   const project = s.assessments.includes('project');
   const report = s.assessments.includes('report');
-  const practice = s.teaching !== 'theory';
-  const lab = s.teaching === 'mixed' || (s.teaching === 'practice' && has('labHours'));
+  const practice = s.teaching === 'practice' || s.teaching === 'mixed'
+    || (s.teaching === 'unknown' && ['实验（实践）项目计划表', '实验报告、实践报告', '实验成绩记录表（单独设置时）'].some((type) => supplied.has(type)));
+  const lab = s.teaching === 'mixed' || (s.teaching === 'practice' && has('labHours'))
+    || (s.teaching === 'unknown' && supplied.has('实验成绩记录表（单独设置时）'));
   const coursework = has('coursework') || supplied.has('平时考核记录表');
   switch (r.code) {
     case 'C004': case 'C026': case 'C027': case 'C028': case 'C029': case 'C035': case 'C036': return coursework;
@@ -90,7 +93,7 @@ export function ruleApplies(r: MaterialRule, s: MaterialScope, supplied: Set<str
     case 'C037': return has('historical');
     case 'C040': return lab || project;
     case 'C041': return lab && has('fiveReports');
-    case 'C042': return lab && has('separateLab');
+    case 'C042': return (lab && has('separateLab')) || supplied.has('实验成绩记录表（单独设置时）');
     case 'C044': return practice || project || report || has('thesis');
     case 'C045': case 'C047': case 'C048': return practice || project || report;
     case 'C046': return lab && has('labReview');
@@ -118,7 +121,8 @@ export function ruleApplies(r: MaterialRule, s: MaterialScope, supplied: Set<str
 
 export function ruleMaterials(r: MaterialRule, s: MaterialScope, supplied: Set<string>) {
   const coursework = s.flags.includes('coursework') || supplied.has('平时考核记录表');
-  const lab = s.teaching !== 'theory';
+  const lab = s.teaching === 'mixed' || s.teaching === 'practice'
+    || (s.teaching === 'unknown' && supplied.has('实验成绩记录表（单独设置时）'));
   const written = s.assessments.includes('written');
   const project = s.assessments.includes('project');
   const report = s.assessments.includes('report');
@@ -146,12 +150,19 @@ export function ruleMaterials(r: MaterialRule, s: MaterialScope, supplied: Set<s
 }
 
 export function scopeRules(scope: MaterialScope, supplied: Set<string>) {
-  const undecided = scope.level === 'course' && !scope.assessments.length
-    ? { ...scope, assessments: [...assessmentForms] } : null;
+  const inferred = scope.level === 'course' && !scope.assessments.length;
+  const current = inferred ? { ...scope, assessments: ([
+    ...(supplied.has('A、B卷样卷') || supplied.has('学生答卷') ? ['written'] : []),
+    ...(supplied.has('项目任务、作品及实践评分表') ? ['project'] : []),
+    ...(supplied.has('课程论文') ? ['report'] : []),
+  ] as MaterialScope['assessments']) } : scope;
+  const possible = scope.level === 'course' && (inferred || scope.teaching === 'unknown')
+    ? (scope.teaching === 'unknown' ? ['mixed', 'practice'] as const : [scope.teaching]).map((teaching) =>
+      ({ ...scope, teaching, assessments: inferred ? [...assessmentForms] : scope.assessments })) : [];
   return checklist.items.map((rule) => {
-    const applies = ruleApplies(rule, scope, supplied);
-    const pendingAssessment = !applies && !!undecided && ruleApplies(rule, undecided, supplied);
-    return { rule, applies, pendingAssessment, materials: applies ? ruleMaterials(rule, scope, supplied) : [] };
+    const applies = ruleApplies(rule, current, supplied);
+    const pendingAssessment = !applies && possible.some((s) => ruleApplies(rule, s, supplied));
+    return { rule, applies, pendingAssessment, materials: applies ? ruleMaterials(rule, current, supplied) : [] };
   });
 }
 
@@ -161,8 +172,8 @@ export function availableMaterials(scope: MaterialScope, supplied: Set<string>) 
 
 export function optionalMaterials(scope: MaterialScope, required: string[]) {
   if (scope.level !== 'course') return [];
-  const uploadScope = scope.assessments.length ? scope : { ...scope, assessments: [...assessmentForms] };
-  return availableMaterials(uploadScope, new Set(materialTypes))
-    .filter((type) => !required.includes(type) && (scope.teaching !== 'theory' ||
-      !['实验成绩记录表（单独设置时）', '实验报告、实践报告', '实验（实践）项目计划表'].includes(type)));
+  const variants = (['mixed', 'practice'] as const).map((teaching) => ({ ...scope, teaching, assessments: [...assessmentForms],
+    flags: [...scope.flags, 'separateLab', 'labHours'] as MaterialFlag[] }));
+  return [...new Set(variants.flatMap((variant) => availableMaterials(variant, new Set(materialTypes))))]
+    .filter((type) => !required.includes(type));
 }

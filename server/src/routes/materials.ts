@@ -2,6 +2,7 @@ import path from 'node:path';
 import { Router, type Request, type Response } from 'express';
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
 import { z } from 'zod';
+import { InvalidInputError, InvalidSpreadsheetError, SheetNotFoundError } from 'read-excel-file/node';
 import { requireAuth, type PublicUser } from '../auth.js';
 import { audit, db } from '../db.js';
 import { PLAN_MAJORS } from '../services/planIdentification.js';
@@ -14,6 +15,7 @@ import { canAccessMaterial, filePages, fullAccess, type MaterialCaseRow, type Ma
 import type { MaterialResult } from '../services/materialReview.js';
 import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { GROUP_PRESETS } from '../services/supervisionRoles.js';
+import { canManageHistory, courseHistory, courseKey, historyCourses, historyIssues, importHistory, previewHistory } from '../services/materialHistory.js';
 
 export const materialsRouter = Router();
 materialsRouter.use(requireAuth);
@@ -21,6 +23,14 @@ const id = z.coerce.number().int().positive();
 const code = z.string().regex(/^[CS]\d{3}$/);
 const results = { passed: '通过', partial: '已检部分未发现问题（仍有待补／待核）', failed: '需整改' };
 const extensions = new Set(MATERIAL_EXTENSIONS);
+const importChoices = z.string().transform((value, ctx): unknown => {
+  try { return JSON.parse(value); }
+  catch (e) {
+    if (!(e instanceof SyntaxError)) throw e;
+    ctx.addIssue({ code: 'custom', message: '课程归档确认格式无效' });
+    return z.NEVER;
+  }
+}).pipe(z.record(z.string(), z.string()));
 const manual = z.object({ finding: z.enum(['未发现问题', '需整改']), note: z.string().trim().min(3).max(800) });
 const corrections = z.object({
   edits: z.array(z.object({ location: z.string(), line: z.number().int().positive(),
@@ -83,7 +93,48 @@ materialsRouter.get('/options', (req, res) => {
     db.prepare("SELECT DISTINCT course_group FROM outline_requirements WHERE course_group != '' ORDER BY course_group").all() as { course_group: string }[])
     .map((g) => g.course_group)])] : user.led_groups;
   res.json({ flags, majors: [...new Set([...PLAN_MAJORS, ...user.program_scopes])],
-    programs: all ? PLAN_MAJORS : user.program_scopes, groups, college: all });
+    programs: all ? PLAN_MAJORS : user.program_scopes, groups, college: all,
+    courses: historyCourses().map((course) => ({ ...course, key: courseKey(course) })) });
+});
+
+materialsRouter.get('/history', (req, res) => {
+  const { course, teacher, page } = z.object({
+    course: z.string().trim().max(120).optional(), teacher: z.string().trim().max(120).optional(),
+    page: z.coerce.number().int().positive().default(1),
+  }).parse(req.query);
+  if (!course && !teacher) return res.json({ rows: [], total: 0 });
+  res.setHeader('Cache-Control', 'private, no-store');
+  const rows = historyIssues(req.user!, { course, teacher });
+  res.json({ rows: rows.slice((page - 1) * 20, page * 20), total: rows.length });
+});
+
+materialsRouter.post(['/history/preview', '/history/import'], (req, res, next) => {
+  if (!canManageHistory(req.user!)) return res.status(403).json({ error: '仅教学条线或管理员可以导入往期问题' });
+  next();
+}, singleUpload(['.xlsx']), async (req, res) => {
+  const file = req.file;
+  try {
+    if (!file) return res.status(400).json({ error: '请选择要导入的 Excel' });
+    const rows = await previewHistory(file.path, file.originalname);
+    if (!rows.length) return res.status(400).json({ error: '未找到课程、具体反馈列或可预览的反馈行' });
+    if (req.path.endsWith('/preview')) {
+      const courses = historyCourses().map((course) => ({ ...course, key: courseKey(course) }));
+      return res.json({ courses, rows: rows.map((row) => ({ ...row,
+        candidates: row.candidates.map((course) => ({ ...course, key: courseKey(course) })) })) });
+    }
+    const choices = importChoices.parse(req.body.choices);
+    const result = importHistory(rows, choices, req.user!);
+    if (!result) return res.status(409).json({ error: '课程匹配已变更，请重新预览' });
+    audit(req.user, '导入往期材料问题', file.originalname, `新增 ${result.added}，合并重复 ${result.duplicates}，跳过 ${result.skipped}`, req.ip);
+    res.json(result);
+  } catch (e) {
+    if (e instanceof InvalidInputError || e instanceof InvalidSpreadsheetError || e instanceof SheetNotFoundError) {
+      return res.status(400).json({ error: '无法读取 Excel，请检查文件格式' });
+    }
+    throw e;
+  } finally {
+    cleanupTmp(file);
+  }
 });
 
 materialsRouter.get('/', (req, res) => {
@@ -270,16 +321,26 @@ materialsRouter.post('/:caseId/runs', (req, res) => {
   const user = req.user!;
   const files = listFiles.all(entry.row.id) as MaterialFileRow[];
   if (!files.length) return res.status(400).json({ error: '请先上传至少一份材料' });
+  const options = z.object({ term: z.string().trim().min(1).max(120).optional(), reviewHistory: z.boolean().default(true) })
+    .parse(req.body ?? {});
+  const scope = { ...entry.scope, term: options.term ?? entry.scope.term };
+  if (!scope.term) return res.status(400).json({ error: '请先选择学期或填写复核时段' });
   if (!getCheckQuota(user.id).remaining) return res.status(429).json({ error: CHECK_QUOTA_ERROR });
-  const plan = files.some((f) => f.type === planMaterial) ? undefined : comparisonPlan(entry.scope);
+  const plan = files.some((f) => f.type === planMaterial) ? undefined : comparisonPlan(scope);
   const snapshot: RunSnapshot = {
-    scope: entry.scope, files: files.map((f) => ({ id: f.id, edits: JSON.parse(f.edits_json),
+    scope, files: files.map((f) => ({ id: f.id, edits: JSON.parse(f.edits_json),
       weights: f.weights_json ? JSON.parse(f.weights_json) : undefined, weightsVerified: !!f.weights_verified })),
     plan: plan ? { name: plan.name, text: plan.extracted_text } : null,
     verifications: JSON.parse(entry.row.verifications_json),
+    history: scope.level === 'course' && options.reviewHistory ? courseHistory(user, scope) : undefined,
   };
-  const { lastInsertRowid } = db.prepare('INSERT INTO material_runs (case_id, user_id, version, snapshot_json) VALUES (?, ?, ?, ?)')
-    .run(entry.row.id, user.id, materialVersion, JSON.stringify(snapshot));
+  const { lastInsertRowid } = db.transaction(() => {
+    if (options.term !== undefined && options.term !== entry.scope.term) {
+      db.prepare('UPDATE material_cases SET scope_json = ? WHERE id = ?').run(JSON.stringify(scope), entry.row.id);
+    }
+    return db.prepare('INSERT INTO material_runs (case_id, user_id, version, snapshot_json) VALUES (?, ?, ?, ?)')
+      .run(entry.row.id, user.id, materialVersion, JSON.stringify(snapshot));
+  })();
   audit(user, '启动全套材料检查', String(lastInsertRowid), entry.scope.title, req.ip);
   kickQueue();
   res.status(201).json({ id: lastInsertRowid });
@@ -292,8 +353,14 @@ materialsRouter.get('/:caseId/runs/:runId', (req, res) => {
   if (!run) return;
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ id: run.id, version: run.version, status: run.status, error: run.error,
-    result: run.result_json ? JSON.parse(run.result_json) : null });
+    result: run.result_json ? resultForUser(run, req.user!) : null });
 });
+
+function resultForUser(run: MaterialRunRow, user: PublicUser) {
+  const result = JSON.parse(run.result_json!) as MaterialResult;
+  if (run.user_id !== user.id && !canManageHistory(user)) delete result.history;
+  return result;
+}
 
 materialsRouter.get('/:caseId/runs/:runId/report.docx', async (req, res) => {
   const entry = findCase(req, res);
@@ -301,7 +368,7 @@ materialsRouter.get('/:caseId/runs/:runId/report.docx', async (req, res) => {
   const run = findRun(entry.row.id, req, res);
   if (!run) return;
   if (!run.result_json) return res.status(409).json({ error: '检查尚未生成报告' });
-  const r = JSON.parse(run.result_json) as MaterialResult;
+  const r = resultForUser(run, req.user!);
   const { scope } = JSON.parse(run.snapshot_json) as RunSnapshot;
   const types = [...new Set([...r.files.map((f) => f.type), ...r.rules.filter((rule) => rule.status !== '不适用').flatMap((rule) => rule.materials)])];
   const doc = new Document({ sections: [{ children: [
@@ -323,6 +390,16 @@ materialsRouter.get('/:caseId/runs/:runId/report.docx', async (req, res) => {
       new Paragraph({ text: `${rule.code} ${rule.title} · ${rule.status}`, heading: HeadingLevel.HEADING_2 }),
       ...rule.findings.map((f) => new Paragraph([f.status, f.location, f.detail].filter(Boolean).join(' | '))),
     ]),
+    ...(r.history ? [
+      new Paragraph({ text: '历史问题复查', heading: HeadingLevel.HEADING_1 }),
+      ...(!r.history.length ? [new Paragraph('没有匹配到可复查的历史问题。')] : []),
+      ...r.history.flatMap((row) => [
+        new Paragraph(`历史反馈（${[row.issue.term || row.issue.date, row.issue.source, row.issue.position].filter(Boolean).join(' · ')}）`),
+        ...row.issue.text.split(/\r?\n/).map((line) => new Paragraph(line)),
+        new Paragraph(`${row.status}：${row.detail}`),
+        ...row.locations.map((location) => new Paragraph(`${location.file} · ${location.position}`)),
+      ]),
+    ] : []),
     ...(r.stats.length ? [new Paragraph({ text: '成绩统计（本次可计算范围）', heading: HeadingLevel.HEADING_1 })] : []),
     ...r.stats.flatMap((sample) => [new Paragraph(`${sample.file}（附件 #${sample.id}）`),
       new Paragraph(Object.entries(sample.weights).map(([key, value]) => `${key} ${value}%`).join('、')),

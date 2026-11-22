@@ -18,6 +18,16 @@ const word = (paragraphs, rows) => Packer.toBuffer(new Document({ sections: [{ c
   ...(rows ? [new Table({ rows: rows.map((row) => new TableRow({ children: row.map((s) => new TableCell({ children: [new Paragraph(s)] })) })) })] : []),
 ] }] }));
 
+function xlsx(rows) {
+  const zip = new JSZip();
+  const sheet = rows.map((cells, i) => `<row r="${i + 1}">${cells.map((cell, j) =>
+    `<c r="${String.fromCharCode(65 + j)}${i + 1}" t="inlineStr"><is><t xml:space="preserve">${cell}</t></is></c>`).join('')}</row>`);
+  zip.file('xl/worksheets/sheet1.xml', `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheet.join('')}</sheetData></worksheet>`);
+  zip.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="反馈明细" sheetId="1" r:id="rId1"/></sheets></workbook>');
+  zip.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
 test('course and college material checks preserve scope, quantified differences, reports and quota', { timeout: 45000 }, async (t) => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), 'cs-material-tests-'));
   const modelRequests = [];
@@ -27,7 +37,10 @@ test('course and college material checks preserve scope, quantified differences,
     const payload = JSON.parse(Buffer.concat(chunks).toString());
     const input = JSON.parse(payload.messages[1].content);
     modelRequests.push(input);
-    const items = input.rules.map((rule) => ({
+    const items = input.issues ? input.issues.map((issue) => ({
+      id: issue.id, status: '未发现问题', detail: '本次表格已明确考核比例。',
+      evidence: [{ source: issue.sources[0], quote: '平时40%，期末60%' }],
+    })) : input.rules.map((rule) => ({
       code: rule.code, status: rule.code === 'C095' ? '需整改' : '未发现问题',
       detail: rule.code === 'C095' ? '汇报声称覆盖全部课程，支撑材料仅覆盖一个教学班。' : '已核对所引原文。',
       evidence: rule.sources.slice(0, 1).map((key) => ({ source: key, quote: input.sources.find((s) => s.key === key).text.split('\n')[0] })),
@@ -92,8 +105,8 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal(r.status, 201, JSON.stringify(r.data));
     return r.data.id;
   }
-  async function check(request, endpoint) {
-    const run = await request(`${endpoint}/runs`, {});
+  async function check(request, endpoint, options = {}) {
+    const run = await request(`${endpoint}/runs`, options);
     assert.equal(run.status, 201, JSON.stringify(run.data));
     for (let i = 0; i < 140; i++) {
       const { data } = await request(`${endpoint}/runs/${run.data.id}`);
@@ -118,6 +131,7 @@ test('course and college material checks preserve scope, quantified differences,
   const gradeId = await add(teacher, course, '课程成绩单', grade, '正式成绩.docx');
   const first = await check(teacher, course);
   assert.equal(first.result.rules.length, 104);
+  assert.deepEqual(first.result.history, []);
   assert.equal(first.result.verdict, 'partial');
   assert.equal(first.result.rules.find((r) => r.code === 'C025').status, '不适用');
   assert.equal(first.result.rules.find((r) => r.code === 'C053').status, '需核实');
@@ -187,6 +201,74 @@ test('course and college material checks preserve scope, quantified differences,
   assert.equal((await teacher(`${course}/files/${gradeId}/original`)).status, 404);
   assert.equal((await teacher(`${course}/runs/${first.id}/report.docx`)).status, 404);
   assert.equal((await teacher('/api/auth/me')).data.checkQuota.used, originalQuota.used + 4);
+
+  await t.test('whole-sheet preview, co-teacher lookup and optional evidence-backed recheck', async () => {
+    const draft = { level: 'course', title: '复查测试课', courseCode: 'COURSE-01', major: scope.major };
+    const created = await admin(base, draft);
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.equal((await admin(base, { ...draft, courseCode: 'COURSE-02', major: '人工智能' })).status, 201);
+    const endpoint = `${base}/${created.data.id}`;
+    const history = `${base}/history`;
+    const feedback = '教学大纲只写了权重范围。\n应明确平时与期末比例。';
+    const workbook = await xlsx([
+      ['课程', '课程代码', '任课教师', '教师工号', '学期', '具体反馈', '原表位置'],
+      ['旧名称', 'COURSE-01', 'Materials Teacher', 'materials-teacher', '2025-2026-1', feedback, '大纲!C2'],
+      ['旧名称', 'COURSE-01', '共同教师', '000123', '2025-2026-1', feedback, '大纲!C3'],
+      ['复查测试课', '', 'Materials Teacher', '', '2025-2026-1', '学生答卷改分未签字。', '试卷!C4'],
+      ['往期独立课程', '', '共同教师', '', '2025-2026-2', '教学进度表少排4课时。', '进度!C5'],
+      ['另一门未匹配课程', '', '', '', '', '请核实教学大纲。', '大纲!C6'],
+    ]);
+    const workbookForm = (choices) => {
+      const form = new FormData();
+      form.set('file', new Blob([workbook]), '反馈.xlsx');
+      if (choices) form.set('choices', JSON.stringify(choices));
+      return form;
+    };
+    assert.equal((await teacher(`${history}/preview`, workbookForm())).status, 403);
+    const preview = await admin(`${history}/preview`, workbookForm());
+    assert.equal(preview.status, 200, JSON.stringify(preview.data));
+    const rows = preview.data.rows;
+    assert.deepEqual(rows.map((row) => row.status), ['matched', 'matched', 'ambiguous', 'unmatched', 'unmatched']);
+    assert.equal(rows[0].candidates[0].name, draft.title);
+    const codeKey = rows[0].candidates[0].key;
+    assert.equal((await admin(`${history}?course=COURSE-01`)).data.total, 0);
+    const choices = { [rows[0].key]: codeKey, [rows[1].key]: codeKey, [rows[2].key]: codeKey, [rows[3].key]: 'original' };
+    assert.deepEqual((await admin(`${history}/import`, workbookForm(choices))).data, { added: 3, duplicates: 1, skipped: 1 });
+    const repeated = { ...choices, [rows[3].key]: JSON.stringify(['往期独立课程', '']) };
+    assert.deepEqual((await admin(`${history}/import`, workbookForm(repeated))).data, { added: 0, duplicates: 4, skipped: 1 });
+    const query = (request, course, teacher) => request(`${history}?${new URLSearchParams({ course, teacher })}`);
+    const byId = (await query(admin, 'course-01', '000123')).data;
+    assert.equal(byId.total, 1);
+    assert.deepEqual(byId.rows[0].teachers.map((entry) => entry.staffNo), ['materials-teacher', '000123']);
+    assert.equal(byId.rows[0].text, feedback);
+    assert.match(byId.rows[0].uploader, /materials-root/);
+    assert.equal((await query(admin, '', 'materials-root')).data.total, 0);
+    assert.equal((await query(admin, '', '共同教师')).data.total, 2);
+    assert.equal((await query(teacher, '复查测试课', 'Materials Teacher')).data.total, 2);
+    assert.equal((await query(teacher, '往期独立课程', '')).data.total, 0);
+
+    const fileId = await add(admin, endpoint, '课程教学大纲', await xlsx([
+      ['考核项目', '权重'], ['总评', '平时40%，期末60%'],
+    ]), '本次大纲.xlsx');
+    assert.equal((await admin(`${endpoint}/runs`, {})).status, 400);
+    const reviewed = await check(admin, endpoint, { term: '2026-2027 第1学期' });
+    assert.equal(reviewed.result.rules.length, 104);
+    const found = reviewed.result.history.find((row) => row.issue.text === feedback);
+    assert.equal(found.status, '未发现问题');
+    assert.deepEqual(found.locations, [{ fileId, file: '本次大纲.xlsx', position: '工作表 反馈明细 · 第 2 行' }]);
+    const missing = reviewed.result.history.find((row) => row.issue.text.includes('学生答卷'));
+    assert.equal(missing.status, '待补');
+    assert.deepEqual(missing.missing, ['学生答卷']);
+    const report = await admin(`${endpoint}/runs/${reviewed.id}/report.docx`);
+    const reportText = await (await JSZip.loadAsync(report.data)).file('word/document.xml').async('string');
+    assert.match(reportText, /历史问题复查/);
+    assert.match(reportText, /学生答卷改分未签字/);
+    assert.match(reportText, /本次大纲\.xlsx · 工作表 反馈明细 · 第 2 行/);
+    const skipped = await check(admin, endpoint, { reviewHistory: false });
+    assert.deepEqual(skipped.result.rules, reviewed.result.rules);
+    assert.equal(skipped.result.history, undefined);
+    assert.equal((await admin(endpoint)).data.scope.term, '2026-2027 第1学期');
+  });
 });
 
 test('provided phone picture and image-only PDF: rotate without mixing scores, keep zero and dash distinct', {

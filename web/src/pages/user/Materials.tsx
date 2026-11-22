@@ -1,30 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Checkbox, Col, Collapse, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Table, Tabs, Tag } from 'antd';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Alert, App, AutoComplete, Button, Card, Checkbox, Col, Collapse, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Table, Tabs, Tag } from 'antd';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, download } from '../../api';
+import { useAuth } from '../../auth';
+import { courseLabel, HistoryImport, HistorySearch, type HistoryCourse, type HistoryIssue } from './MaterialHistory';
 
 const base = '/api/materials';
 const planType = '人才培养方案及支撑矩阵';
 const levels = { course: '课程检查', program: '专业复核', group: '教研室／课程组复核', college: '学院复核' };
-const teaching = { theory: '纯理论', mixed: '理论＋实验', practice: '独立实践' };
-const assessments = { written: '笔试', computer: '机考', project: '项目', report: '报告／课程论文', other: '其他' };
-const roundings = { unknown: '未确认', integer: '四舍五入到整数', oneDecimal: '四舍五入到一位小数', exact: '不取整' };
 const statusNames = { queued: '排队中', running: '检查中', done: '已完成', failed: '检查失败' };
 const verdictNames = { passed: '通过', partial: '已检部分未发现问题（仍有待补／待核）', failed: '需整改' };
 const colors: Record<string, string> = { 未发现问题: 'green', 需整改: 'red', 建议完善: 'blue', 待补: 'gold', 需核实: 'orange', 不适用: 'default' };
 const choices = (items: Record<string, string>) => Object.entries(items).map(([value, label]) => ({ value, label }));
 const options = (items: string[]) => items.map((value) => ({ value, label: value }));
 
-type Scope = { level: keyof typeof levels; title: string; term: string; section: string; major: string; group: string;
-  planGrade: number; teaching: keyof typeof teaching; assessments: string[]; flags: string[]; rounding: keyof typeof roundings };
+type Scope = { level: keyof typeof levels; title: string; courseCode?: string; term: string; section: string; major: string; group: string; planGrade: number };
 type Run = { id: number; status: keyof typeof statusNames; error: string | null; version: string;
   created_at: string; verdict: keyof typeof verdictNames | null };
 type CaseRecord = { id: number; scope: Scope; editable: boolean; scopeLocked: boolean };
 type Attached = { id: number; name: string; type: string; grade: boolean };
 type Detail = CaseRecord & { version: string; expected: string[]; optional: string[];
   plan: { name: string } | null; files: Attached[]; runs: Run[] };
-type Picklists = { flags: Record<string, string>; majors: string[]; programs: readonly string[]; groups: string[]; college: boolean };
+type Picklists = { majors: string[]; programs: readonly string[]; groups: string[]; college: boolean; courses: HistoryCourse[] };
 type GradeRow = { location: string; line: number; cells: Record<string, string>; uncertain: string[]; ocr: boolean };
 type GradeEdit = { location: string; line: number; column: string; value: string };
 type GradeData = { rows: GradeRow[]; edits: GradeEdit[]; weights: Record<string, number>; weightEdits: Record<string, number> | null;
@@ -32,11 +30,31 @@ type GradeData = { rows: GradeRow[]; edits: GradeEdit[]; weights: Record<string,
 type Finding = { status: string; location: string; detail: string };
 type Rule = { code: string; title: string; materials: string[]; status: string; findings: Finding[] };
 type Result = { verdict: keyof typeof verdictNames; rules: Rule[]; files: { id: number; name: string; type: string; warnings: string[] }[];
+  history?: { issue: HistoryIssue; status: string; detail: string; locations: { fileId: number; file: string; position: string }[] }[];
   stats: { id: number; file: string; weights: Record<string, number>; stats: { column: string; count: number; rows: number; excluded: number; unreadable: number; mean: number | null; bands: number[] }[] }[] };
 
 export default function Materials() {
   const { id } = useParams();
-  return id ? <CaseDetail key={id} id={id} /> : <CaseList />;
+  return id ? <CaseDetail key={id} id={id} /> : <MaterialsHome />;
+}
+
+function MaterialsHome() {
+  const { user } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const canImport = user?.role === 'admin' || user?.college_role === 'teaching';
+  const tab = params.get('tab');
+  return <div className="page">
+    <div className="page-head"><div><h1>全套材料检查</h1>
+      <div className="sub">上传教学材料按清单检查，也可以单独导入或查询往期问题。</div>
+    </div></div>
+    <Tabs activeKey={tab === 'history' || (tab === 'import' && canImport) ? tab : 'check'}
+      onChange={(key) => setParams(key === 'check' ? {} : { tab: key })}
+      items={[
+        { key: 'check', label: '上传材料并检查', children: <CaseList /> },
+        ...(canImport ? [{ key: 'import', label: '整表导入往期问题', children: <HistoryImport /> }] : []),
+        { key: 'history', label: '查询历史问题', children: <HistorySearch /> },
+      ]} />
+  </div>;
 }
 
 function CaseList() {
@@ -52,9 +70,9 @@ function CaseList() {
     finally { setLoading(false); }
   }, [message]);
   useEffect(() => { void load(); }, [load]);
-  return <div className="page">
+  return <>
     <div className="page-head">
-      <div><h1>全套教学材料检查</h1><div className="sub">按课程、学期和教学班送检，也可查专业、课程组或学院的专项材料。</div></div>
+      <div className="sub">为课程选择学期后，可送检全套或部分材料，也可进行专业、课程组或学院复核。</div>
       <Button type="primary" onClick={() => setEditor('new')}>新建送检档案</Button>
     </div>
     <Card>
@@ -81,7 +99,7 @@ function CaseList() {
         if (editor === 'new') nav(`/materials/${id}`);
         else void load();
       }} />}
-  </div>;
+  </>;
 }
 
 function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: () => void; onSaved: (id: number) => void }) {
@@ -90,27 +108,19 @@ function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: 
   const [busy, setBusy] = useState(false);
   const [form] = Form.useForm<Scope>();
   const level = Form.useWatch('level', form) ?? entry?.scope.level ?? 'course';
-  const teachingType = Form.useWatch('teaching', form) ?? entry?.scope.teaching;
-  const formats = Form.useWatch('assessments', form) ?? entry?.scope.assessments ?? [];
+  const courseCode = Form.useWatch('courseCode', form);
   const { message } = App.useApp();
   useEffect(() => {
     api.get<Picklists>(`${base}/options`).then(setSettings).catch((e) => setError(e.message));
   }, []);
   const levelOptions = choices(levels).filter(({ value }) => value === entry?.scope.level || value === 'course' || (value === 'program' ? settings?.programs.length
     : value === 'group' ? settings?.groups.length : settings?.college));
-  const flagOptions = choices(settings?.flags ?? {}).filter(({ value }) => {
-    if (level === 'program') return value === 'mockProgram';
-    if (level === 'group') return value === 'examReview2024';
-    if (value === 'labHours') return teachingType === 'practice';
-    if (['separateLab', 'fiveReports', 'labReview'].includes(value)) return teachingType === 'practice' || teachingType === 'mixed';
-    if (['twoPapers', 'paperAnswers'].includes(value)) return formats.includes('written');
-    return !['mockProgram', 'examReview2024'].includes(value);
-  });
+  const courseOptions = settings?.courses.map((course) => ({ value: course.key, label: courseLabel(course), course }));
   return <Modal title={entry ? '编辑档案' : '新建送检档案'} width={720} open onCancel={onClose}
     okText={entry ? '保存修改' : '建档并上传'} confirmLoading={busy} okButtonProps={{ disabled: !settings }} onOk={() => form.submit()}>
       {error && <Alert type="error" message={error} />}
       <Spin spinning={!settings && !error}>
-      <Form form={form} layout="vertical" initialValues={entry?.scope ?? { level: 'course', rounding: 'unknown', planGrade: 2025 }}
+      <Form form={form} layout="vertical" initialValues={entry?.scope ?? { level: 'course', planGrade: 2025 }}
         onFinish={async (values) => {
           setBusy(true);
           try {
@@ -126,10 +136,17 @@ function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: 
           finally { setBusy(false); }
         }}>
         <Form.Item name="level" label="检查范围" rules={[{ required: true }]}><Select disabled={!!entry} options={levelOptions} /></Form.Item>
-        <Row gutter={16}>
-          <Col xs={24} sm={12}><Form.Item name="title" label={level === 'course' ? '课程名称' : '复核名称'} rules={[{ required: true }]}><Input maxLength={120} /></Form.Item></Col>
-          <Col xs={24} sm={12}><Form.Item name="term" label="学年学期／复核时段" rules={[{ required: true }]}><Input placeholder="例如 2025-2026 第2学期" maxLength={120} /></Form.Item></Col>
-        </Row>
+        <Form.Item name="courseCode" hidden><Input /></Form.Item>
+        <Form.Item name="title" label={level === 'course' ? '课程' : '复核名称'}
+          extra={level === 'course' && courseCode ? `课程代码：${courseCode}` : undefined} rules={[{ required: true, whitespace: true }]}>
+          {level === 'course' ? <AutoComplete options={courseOptions} placeholder="按课程名称或代码选择，也可填写新课程名称"
+            filterOption={(value, option) => !!option?.label.toLowerCase().includes(value.toLowerCase())}
+            onChange={() => form.setFieldValue('courseCode', '')}
+            onSelect={(_, { course }) => form.setFieldsValue({ title: course.name, courseCode: course.code,
+              ...(settings?.majors.includes(course.major) && !entry?.scopeLocked ? { major: course.major } : {}) })}>
+            <Input maxLength={120} />
+          </AutoComplete> : <Input maxLength={120} />}
+        </Form.Item>
         {(level === 'course' || level === 'program') && <Row gutter={16}>
           <Col xs={24} sm={12}><Form.Item name="major" label="专业" rules={[{ required: true }]}>
             <Select disabled={entry?.scopeLocked} options={options([...(level === 'course' ? settings?.majors ?? [] : settings?.programs ?? [])])} />
@@ -137,27 +154,6 @@ function CaseEditor({ entry, onClose, onSaved }: { entry?: CaseRecord; onClose: 
           <Col xs={24} sm={12}><Form.Item name="planGrade" label="对照培养方案年级"><InputNumber min={2000} max={2100} style={{ width: '100%' }} /></Form.Item></Col>
         </Row>}
         {level === 'group' && <Form.Item name="group" label="课程组" rules={[{ required: true }]}><Select disabled={entry?.scopeLocked} options={options(settings?.groups ?? [])} /></Form.Item>}
-        {level === 'course' && <Row gutter={16}>
-          <Col xs={24} sm={12}><Form.Item name="section" label="教学班" rules={[{ required: true }]}><Input maxLength={120} placeholder="填写班号或合班名称" /></Form.Item></Col>
-          <Col xs={24} sm={12}><Form.Item name="teaching" label="授课类型" rules={[{ required: true, message: '请选择授课类型' }]}
-            extra="决定是否检查实验或实践材料。"><Select placeholder="请选择授课类型" options={choices(teaching)} /></Form.Item></Col>
-        </Row>}
-        {level !== 'college' && <Collapse items={[{
-          key: 'checks', label: '补充检查设置（选填）', forceRender: true, children: <>
-            {level === 'course' && <>
-              <Form.Item name="assessments" label="考核形式" extra="用于确认是否查试卷、机考、项目或报告。不确定可先送检，相关项留待核实。">
-                <Checkbox.Group options={choices(assessments)} />
-              </Form.Item>
-              <Form.Item name="rounding" label="总评取整方式" extra="仅用于复算按百分制原始分加权的总评；不确定时不复算。">
-                <Select options={choices(roundings)} />
-              </Form.Item>
-            </>}
-            <Form.Item name="flags" label={level === 'course' ? '还需检查哪些内容' : '专项检查条件'}
-              extra={level === 'course' ? '例如勾选「另设实验成绩表」，系统才会把独立实验成绩表列为应交。' : undefined}>
-              <Checkbox.Group options={flagOptions} />
-            </Form.Item>
-          </>,
-        }]} />}
         {entry?.scopeLocked && (level === 'course' || level === 'program' || level === 'group') &&
           <div className="muted" style={{ marginTop: 12 }}>已有附件或检查记录，不能更改所属专业或课程组；其他修改在下次检查时生效。</div>}
       </Form>
@@ -187,6 +183,8 @@ function CaseDetail({ id }: { id: string }) {
   const nav = useNavigate();
   const back = () => nav('/materials');
   const [entry, setEntry] = useState<Detail>();
+  const [term, setTerm] = useState<string>();
+  const [reviewHistory, setReviewHistory] = useState(true);
   const [error, setError] = useState('');
   const [runId, setRunId] = useState<number>();
   const [result, setResult] = useState<Result | null>(null);
@@ -201,6 +199,7 @@ function CaseDetail({ id }: { id: string }) {
   const fetchCase = useCallback(async () => {
     const detail = await api.get<Detail>(url);
     setEntry(detail);
+    setTerm((old) => old ?? detail.scope.term);
     setType((old) => old && (detail.expected.includes(old) || detail.optional.includes(old)) ? old : undefined);
     setRunId((old) => old ?? detail.runs[0]?.id);
   }, [url]);
@@ -235,26 +234,42 @@ function CaseDetail({ id }: { id: string }) {
   if (!entry) return <div className="page"><Spin /></div>;
   const { scope } = entry;
   const readonly = !entry.editable || active;
+  const isCourse = scope.level === 'course';
+  const year = new Date().getFullYear();
+  const termOptions = options([year, year - 1, year - 2].flatMap((start) =>
+    [1, 2].map((semester) => `${start}-${start + 1} 第${semester}学期`)));
   return <div className="page">
     {backButton}
     <div className="page-head">
       <div><h1>{scope.title}</h1>
-        <div className="sub">{[levels[scope.level], scope.term, scope.section, scope.major, scope.group, scope.level === 'course' && teaching[scope.teaching]].filter(Boolean).join(' · ')}</div>
+        <div className="sub">{[levels[scope.level], scope.courseCode, scope.term, scope.section, scope.major, scope.group].filter(Boolean).join(' · ')}</div>
       </div>
       {entry.editable && <Space wrap>
         <Button disabled={active || pending} onClick={() => setEditing(true)}>编辑档案</Button>
         <CaseDelete entry={entry} disabled={active || pending} onDeleted={back} />
-        <Button type="primary" disabled={active || !entry.files.length} loading={pending}
-          onClick={() => perform(async () => { const r = await api.post<{ id: number }>(`${url}/runs`); setRunId(r.id); })}>
+        {isCourse && <Checkbox checked={reviewHistory} disabled={readonly || pending}
+          onChange={(e) => setReviewHistory(e.target.checked)}>同时复查本课程的历史问题</Checkbox>}
+        <Button type="primary" disabled={active || !entry.files.length || !term?.trim()} loading={pending}
+          onClick={() => perform(async () => {
+            const r = await api.post<{ id: number }>(`${url}/runs`, { term, reviewHistory });
+            setRunId(r.id);
+          })}>
           {latest ? '重新检查当前材料' : '开始检查'}
         </Button>
       </Space>}
     </div>
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card title="本次送检材料" extra={<Tag>规则 {entry.version}</Tag>}>
+        {entry.editable && <Form layout="vertical">
+          <Form.Item label={isCourse ? '送检学期' : '复核时段'} required htmlFor="material-term">
+            <AutoComplete id="material-term" value={term ?? ''} disabled={readonly || pending}
+              style={{ width: '100%', maxWidth: 320 }} options={isCourse ? termOptions : []} onChange={setTerm}
+              filterOption={(value, option) => !!option?.value.includes(value)} placeholder={isCourse ? '选择或填写学期' : '填写本次复核时段'}>
+              <Input maxLength={120} />
+            </AutoComplete>
+          </Form.Item>
+        </Form>}
         <Alert type="info" showIcon message="可以先检查已上传的材料。应交未上传记为待补，不适用不记缺失。" />
-        {scope.level === 'course' && !scope.assessments.length &&
-          <div className="muted" style={{ marginTop: 8 }}>未填写考核形式不影响送检；相关检查会标为「需核实」，可在「编辑档案」中补充。</div>}
         {entry.editable && <Space wrap style={{ margin: '14px 0' }}>
           <Select aria-label="材料类型" placeholder="选择材料类型" disabled={readonly} showSearch value={type} onChange={setType}
             style={{ minWidth: 260 }} options={options([...entry.expected, ...entry.optional])} />
@@ -366,6 +381,21 @@ function ResultView({ url, result, onVerify }: { url: string; result: Result; on
           </Space>,
         }))} />
       </Space> },
+      ...(result.history ? [{ key: 'history', label: `历史问题复查（${result.history.length}）`,
+        children: <Table rowKey={(r) => r.issue.id} dataSource={result.history} size="small" scroll={{ x: 800 }}
+          pagination={{ pageSize: 12 }} locale={{ emptyText: '没有匹配到可复查的历史问题。常规清单检查已照常完成。' }}
+          columns={[
+            { title: '历史反馈原文', width: '40%', render: (_, r) => <>
+              <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{r.issue.text}</div>
+              <div className="muted">{[r.issue.term || r.issue.date, r.issue.source, r.issue.position].filter(Boolean).join(' · ')}</div>
+            </> },
+            { title: '本次复查结论', width: '30%', render: (_, r) => <><Tag color={colors[r.status]}>{r.status}</Tag>{r.detail}</> },
+            { title: '本次文件与位置', render: (_, r) => r.locations.length ? r.locations.map((loc, index) =>
+              <div key={index}>{loc.fileId
+                ? <Button type="link" size="small" onClick={() => download(`${url}/files/${loc.fileId}/original`)}>{loc.file}</Button>
+                : loc.file} · {loc.position}</div>) : '暂无核验依据' },
+          ]} />,
+      }] : []),
     ]} />
   </Space>;
 }

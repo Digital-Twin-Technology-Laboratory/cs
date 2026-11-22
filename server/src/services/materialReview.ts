@@ -5,6 +5,7 @@ import { extractJson, ResultFormatError } from './ai/schema.js';
 import { type MaterialScope, scopeRules } from './materialChecklist.js';
 import { extractGradeRows, GRADE_TYPES, gradeNumber, materialWeights, scoreStats, studentId, type GradeEdit, type GradeRow, type Weights } from './materialGrades.js';
 import type { MaterialPage } from './materialExtract.js';
+import type { HistoryReview } from './materialHistoryReview.js';
 
 export type MaterialInput = {
   id: number; name: string; type: string; pages: MaterialPage[]; edits: GradeEdit[]; weights?: Weights; weightsVerified?: boolean;
@@ -16,6 +17,7 @@ export type MaterialResult = {
   rules: { code: string; title: string; materials: string[]; status: ReviewState; findings: Finding[] }[];
   files: { id: number; name: string; type: string; warnings: string[] }[];
   stats: { id: number; file: string; weights: Record<string, number>; stats: ReturnType<typeof scoreStats>[] }[];
+  history?: HistoryReview[];
 };
 
 const issueOrder: ReviewState[] = ['需整改', '待补', '需核实', '建议完善', '未发现问题'];
@@ -31,7 +33,7 @@ const confirmed = (file: MaterialInput, row: GradeRow, key: string) =>
     edit.location === row.location && edit.line === row.line && edit.column === key));
 const human = new Set(['C015', 'C030', 'C031', 'C037', 'C042', 'C047', 'C049', 'C052', 'C054', 'C055', 'C062', 'C063',
   'C064', 'C065', 'C066', 'C067', 'C068', 'C074', 'C075', 'C084']);
-const safeForAi = new Set([
+export const safeForAi = new Set([
   '课程教学大纲', '教学进度表（教学日历）', '教案', '课件', '随堂教学资料（按本轮通知）', '教材或实验指导书',
   '实验（实践）项目计划表', '命题双向细目表', '命题审核表', 'A、B卷样卷', '参考答案及试卷评分标准',
   '人才培养方案及支撑矩阵', '实验实训条件及项目开出记录', '学院汇报及支撑目录', '教学管理制度及适用通知',
@@ -239,7 +241,7 @@ export async function reviewMaterials(scope: MaterialScope, input: MaterialInput
   const rules = results.map(({ rule, applies, pendingAssessment, materials }) => {
     if (pendingAssessment) return { code: rule.code, title: rule.title, materials: [],
       status: '需核实' as const, findings: [{ status: '需核实' as const, location: '',
-        detail: '尚未填写考核形式，无法判断本项是否适用。请在编辑档案的补充检查设置中确认。' }] };
+        detail: '现有材料不足以判断本项是否适用，请对照教学大纲或考核说明核实。' }] };
     if (!applies) return { code: rule.code, title: rule.title, materials: rule.materials.map((m) => m.name),
       status: '不适用' as const, findings: [] };
     const findings = notes.get(rule.code) ?? [{ status: '需核实' as const, location: '', detail: '暂无可用核查依据' }];

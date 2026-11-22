@@ -8,6 +8,8 @@ import { materialVersion, planMaterial, type MaterialScope } from './materialChe
 import { canSendPageToAi, materialVerdict, reviewMaterials, type MaterialInput, type MaterialResult } from './materialReview.js';
 import { aiReady, callAi } from './ai/provider.js';
 import { parsePublicPlanMatch, publicPlanMatchPrompt, splitPublicPlan } from './publicPlan.js';
+import type { HistoryIssue } from './materialHistory.js';
+import { reviewHistory } from './materialHistoryReview.js';
 
 export type MaterialCaseRow = { id: number; user_id: number; scope_json: string; created_at: string; verifications_json: string };
 export type MaterialFileRow = { id: number; case_id: number; type: string; file_name: string; file_path: string; active: number;
@@ -18,6 +20,7 @@ export type RunSnapshot = {
   files: { id: number; edits: GradeEdit[]; weights?: Weights; weightsVerified: boolean }[];
   plan: { name: string; text: string } | null;
   verifications: Record<string, Verification>;
+  history?: HistoryIssue[];
 };
 export type MaterialRunRow = { id: number; case_id: number; user_id: number; version: string; snapshot_json: string;
   status: 'queued' | 'running' | 'done' | 'failed'; result_json: string | null; error: string | null;
@@ -85,6 +88,7 @@ export async function runMaterialCheck(id: number) {
   }
   const result = await reviewMaterials(snapshot.scope, documents, settings);
   applyVerifications(result, snapshot.verifications);
+  if (snapshot.history) result.history = await reviewHistory(snapshot.history, documents, settings);
   db.prepare("UPDATE material_runs SET status = 'done', result_json = ?, finished_at = datetime('now','localtime') WHERE id = ?")
     .run(JSON.stringify(result), id);
 }

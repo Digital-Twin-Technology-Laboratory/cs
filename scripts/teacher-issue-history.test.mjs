@@ -195,4 +195,21 @@ test('teacher issue history preserves findings and enforces teaching-only access
     assert.equal((await users.teaching.request(teachersEndpoint)).status, 403);
     assert.equal((await users.teaching.request(history)).status, 403);
   });
+
+  await t.test('the unified history keeps old findings but filters by assigned teacher, not uploader', async () => {
+    const requirement = database.prepare(`INSERT INTO outline_requirements (source_key, course_name, professional, teacher_names)
+      VALUES ('legacy-feedback-teacher', 'Historical course title', ?, 'empty')`).run(programs[0]).lastInsertRowid;
+    database.prepare('UPDATE submissions SET outline_requirement_id = ? WHERE id = ?').run(requirement, old);
+    const base = '/api/materials/history';
+    const { data } = await users.empty.request(`${base}?teacher=empty&course=Historical+course+title`);
+    assert.equal(data.total, 1);
+    assert.match(data.rows[0].text, /Weights total 120%/);
+    assert.deepEqual(data.rows[0].teachers, [{ name: 'empty', staffNo: 'empty' }]);
+    assert.match(data.rows[0].uploader, /alice/);
+    assert.equal(data.rows[0].submissionId, undefined);
+    assert.equal((await admin(`${base}?teacher=alice`)).data.total, 0);
+    const course = (await admin(`${base}?course=Historical+course+title`)).data;
+    assert.ok(course.rows.some((row) => row.submissionId === old));
+    assert.ok(course.rows.some((row) => row.submissionId !== old && !row.teachers.length));
+  });
 });

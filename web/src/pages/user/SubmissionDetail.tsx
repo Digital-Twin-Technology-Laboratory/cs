@@ -106,7 +106,7 @@ export default function SubmissionDetail() {
           </div>
         </div>
         <Space wrap className="no-print">
-          {canViewHistory && <Button onClick={() => setHistoryOpen(true)}>对照该教师历史问题</Button>}
+          {canViewHistory && <Button onClick={() => setHistoryOpen(true)}>对照该上传人的历史大纲检查</Button>}
           <SubmissionCourseEditor id={s.id} ownerId={s.user_id} name={s.course.name} status={s.status} onSaved={load} />
         </Space>
       </div>
@@ -161,7 +161,7 @@ export default function SubmissionDetail() {
         )}
         {s.status === 'done' && s.result && data.checklist && <ResultView sub={s} items={data.checklist.items} sections={data.sections} />}
       </Space>
-      {canViewHistory && <Drawer className="no-print" title="对照该教师历史问题" open={historyOpen} mask={false}
+      {canViewHistory && <Drawer className="no-print" title="对照该上传人的历史大纲检查" open={historyOpen} mask={false}
         onClose={() => setHistoryOpen(false)} size="min(560px, 100vw)" destroyOnHidden>
         {historyOpen && <TeacherIssueHistory key={s.id} teacherId={s.user_id} beforeId={s.id} />}
       </Drawer>}

@@ -184,6 +184,14 @@ CREATE TABLE IF NOT EXISTS submissions (
 );
 CREATE INDEX IF NOT EXISTS idx_sub_course ON submissions(course_id);
 CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
+CREATE TABLE IF NOT EXISTS material_history (
+  issue_key TEXT PRIMARY KEY,
+  course_name TEXT NOT NULL,
+  course_code TEXT NOT NULL,
+  major TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 CREATE TABLE IF NOT EXISTS material_cases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
