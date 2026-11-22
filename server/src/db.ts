@@ -184,6 +184,41 @@ CREATE TABLE IF NOT EXISTS submissions (
 );
 CREATE INDEX IF NOT EXISTS idx_sub_course ON submissions(course_id);
 CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
+CREATE TABLE IF NOT EXISTS material_cases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  scope_json TEXT NOT NULL,
+  verifications_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS material_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id INTEGER NOT NULL REFERENCES material_cases(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  pages_json TEXT,
+  edits_json TEXT NOT NULL DEFAULT '[]',
+  weights_json TEXT,
+  weights_verified INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_material_file_case ON material_files(case_id);
+CREATE TABLE IF NOT EXISTS material_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id INTEGER NOT NULL REFERENCES material_cases(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  result_json TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  started_at TEXT,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_material_run_case ON material_runs(case_id);
+CREATE INDEX IF NOT EXISTS idx_material_run_user ON material_runs(user_id);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER,

@@ -7,3 +7,4 @@ web/dist/
 .tmp-*
 *.log
 .DS_Store
+/.venv-material-ocr/

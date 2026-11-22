@@ -306,7 +306,9 @@ adminRouter.delete('/users/:id', (req, res) => {
   if (!u) return res.status(404).json({ error: '用户不存在' });
   if (u.id === req.user!.id) return res.status(400).json({ error: '不能删除自己的账号' });
   if (u.role === 'admin' && u.status === 'active' && activeAdmins() <= 1) return res.status(400).json({ error: '系统至少需要保留一个可用的管理员账号' });
-  const files = db.prepare('SELECT file_path FROM submissions WHERE user_id = ?').all(id) as { file_path: string }[];
+  const files = db.prepare(`SELECT file_path FROM submissions WHERE user_id = ?
+    UNION ALL SELECT f.file_path FROM material_files f JOIN material_cases c ON c.id = f.case_id WHERE c.user_id = ?`)
+    .all(id, id) as { file_path: string }[];
   db.transaction(() => {
     db.prepare('DELETE FROM users WHERE id = ?').run(id);
     db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(id);

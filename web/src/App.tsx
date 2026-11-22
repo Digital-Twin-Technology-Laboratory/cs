@@ -7,6 +7,7 @@ import AdminLayout from './layouts/AdminLayout';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Upload from './pages/user/Upload';
+import Materials from './pages/user/Materials';
 import Courses from './pages/user/Courses';
 import CourseDetail from './pages/user/CourseDetail';
 import SubmissionDetail from './pages/user/SubmissionDetail';
@@ -61,6 +62,8 @@ export default function App() {
         <Route path="teacher-history" element={user && (user.role === 'admin' || user.college_role === 'teaching') ? <TeacherHistory /> : <Navigate to="/" replace />} />
         <Route path="view-management" element={user && (user.role === 'admin' || user.supervision_manager) ? <ViewManagement /> : <Navigate to="/" replace />} />
         <Route path="upload" element={<Upload />} />
+        <Route path="materials" element={<Materials />} />
+        <Route path="materials/:id" element={<Materials />} />
         <Route path="courses" element={<Courses />} />
         <Route path="courses/:id" element={<CourseDetail />} />
         <Route path="submissions" element={<Submissions />} />

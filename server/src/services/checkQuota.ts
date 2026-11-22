@@ -9,8 +9,11 @@ export function getCheckQuota(userId: number) {
       COUNT(CASE WHEN status = 'done' AND date(finished_at) = date('now','localtime') THEN 1 END) AS used,
       COUNT(CASE WHEN status IN ('queued', 'running') THEN 1 END) AS pending,
       COUNT(CASE WHEN status = 'running' THEN 1 END) AS running
-    FROM submissions WHERE user_id = ?
-  `).get(userId) as { used: number; pending: number; running: number };
+    FROM (
+      SELECT status, finished_at FROM submissions WHERE user_id = ?
+      UNION ALL SELECT status, finished_at FROM material_runs WHERE user_id = ?
+    )
+  `).get(userId, userId) as { used: number; pending: number; running: number };
   const grant = db.prepare("SELECT amount FROM check_quota_grants WHERE user_id = ? AND quota_date = date('now','localtime')").get(userId) as { amount: number } | undefined;
   const bonus = grant?.amount ?? 0;
   const limit = DAILY_CHECK_LIMIT + bonus;

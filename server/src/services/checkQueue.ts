@@ -6,6 +6,7 @@ import { computeVerdict, extractJson, normalizeResult, ResultFormatError } from 
 import { loadChecklist } from './checklist.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from './checkQuota.js';
 import { parsePublicPlanMatch, publicPlanMatchPrompt, splitPublicPlan, type PublicPlanMatch } from './publicPlan.js';
+import { runMaterialCheck } from './materialRuns.js';
 
 export interface CourseSnapshot {
   name: string;
@@ -52,24 +53,27 @@ function pump() {
   const limit = Math.max(1, getSettings('ai').concurrency);
   while (running < limit) {
     const next = db
-      .prepare("SELECT id, user_id FROM submissions WHERE status = 'queued' ORDER BY id LIMIT 1")
-      .get() as { id: number; user_id: number } | undefined;
+      .prepare(`SELECT * FROM (
+        SELECT id, user_id, created_at, 'submissions' AS kind FROM submissions WHERE status = 'queued'
+        UNION ALL SELECT id, user_id, created_at, 'material_runs' AS kind FROM material_runs WHERE status = 'queued'
+      ) ORDER BY created_at, id, kind LIMIT 1`)
+      .get() as { id: number; user_id: number; kind: 'submissions' | 'material_runs' } | undefined;
     if (!next) return;
     const quota = getCheckQuota(next.user_id);
     if (quota.used >= quota.limit) {
-      db.prepare("UPDATE submissions SET status = 'failed', error = ?, finished_at = datetime('now','localtime') WHERE id = ?")
+      db.prepare(`UPDATE ${next.kind} SET status = 'failed', error = ?, finished_at = datetime('now','localtime') WHERE id = ?`)
         .run(CHECK_QUOTA_ERROR, next.id);
       continue;
     }
     if (quota.used + quota.running >= quota.limit) return;
     const claimed = db
-      .prepare("UPDATE submissions SET status = 'running', started_at = datetime('now','localtime'), error = NULL WHERE id = ? AND status = 'queued'")
+      .prepare(`UPDATE ${next.kind} SET status = 'running', started_at = datetime('now','localtime'), error = NULL WHERE id = ? AND status = 'queued'`)
       .run(next.id);
     if (!claimed.changes) continue;
     running++;
-    runCheck(next.id)
+    (next.kind === 'submissions' ? runCheck(next.id) : runMaterialCheck(next.id))
       .catch((e) => {
-        db.prepare("UPDATE submissions SET status = 'failed', error = ?, finished_at = datetime('now','localtime') WHERE id = ?").run(
+        db.prepare(`UPDATE ${next.kind} SET status = 'failed', error = ?, finished_at = datetime('now','localtime') WHERE id = ?`).run(
           String(e?.message || e).slice(0, 1000),
           next.id,
         );
@@ -143,5 +147,6 @@ async function runCheck(id: number) {
 export function startQueue() {
   // 服务重启时，中断的任务重新排队
   db.prepare("UPDATE submissions SET status = 'queued' WHERE status = 'running'").run();
+  db.prepare("UPDATE material_runs SET status = 'queued' WHERE status = 'running'").run();
   kickQueue();
 }

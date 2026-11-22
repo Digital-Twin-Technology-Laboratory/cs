@@ -20,7 +20,8 @@ export default function AppLayout() {
 
   const items = [
     { key: '/overview', label: <Link to="/overview">个人总览</Link> },
-    { key: '/upload', label: <Link to="/upload">上传检查</Link> },
+    { key: '/upload', label: <Link to="/upload">大纲专项检查</Link> },
+    { key: '/materials', label: <Link to="/materials">全套材料检查</Link> },
     { key: '/submissions', label: <Link to="/submissions">上传记录</Link> },
     ...(user && (user.role === 'admin' || user.college_role !== 'none' || user.led_groups.length > 0 || user.program_scopes.length > 0) ? [{ key: '/supervision', label: <Link to="/supervision">{user.role === 'admin' || user.college_role === 'teaching' ? '全院总览' : user.college_role === 'program' || user.program_scopes.length ? '专业总览' : '课程组总览'}</Link> }] : []),
     ...(user && (user.role === 'admin' || user.college_role === 'teaching') ? [{ key: '/teacher-history', label: <Link to="/teacher-history">教师历史问题</Link> }] : []),
