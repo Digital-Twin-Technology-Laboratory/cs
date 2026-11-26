@@ -40,7 +40,8 @@ test('course and college material checks preserve scope, quantified differences,
   const dataDir = mkdtempSync(path.join(os.tmpdir(), 'cs-material-tests-'));
   const modelRequests = [];
   const visionRequests = [];
-  const visionText = '平时40%，期末60%';
+  const visionRow = '数据库系统的基本原理 | 2 | 2 | 4';
+  const visionText = ['| 教学内容 | 理论学时 | 实践学时 | 合计 |', '| --- | ---: | ---: | ---: |', visionRow].join('\n');
   let rejectImage = false;
   let imageReviewAttempts = 0;
   let invalidReview = false;
@@ -81,7 +82,10 @@ test('course and college material checks preserve scope, quantified differences,
     })) : input.rules.map((rule) => ({
       code: rule.code, status: rule.code === 'C095' ? '需整改' : '未发现问题',
       detail: rule.code === 'C095' ? '汇报声称覆盖全部课程，支撑材料仅覆盖一个教学班。' : '已核对所引原文。',
-      evidence: rule.sources.slice(0, 1).map((key) => ({ source: key, quote: input.sources.find((s) => s.key === key).text.split('\n')[0] })),
+      evidence: rule.sources.slice(0, 1).map((key) => {
+        const source = input.sources.find((s) => s.key === key);
+        return { source: key, quote: source.location.includes('API 识图') ? visionRow : source.text.split('\n')[0] };
+      }),
     }));
     if (input.rules?.some((rule) => rule.code === 'C001') && input.sources.some((s) => s.location.includes('API 识图'))) {
       imageReviewAttempts++;
@@ -359,7 +363,8 @@ test('course and college material checks preserve scope, quantified differences,
     assert.ok(modelRequests.some((r) => r.sources.some((s) => s.location.includes('API 识图') && s.text === visionText)));
     assert.equal(imageReviewAttempts, 2);
     for (const code of ['C001', 'C003']) {
-      assert.ok(checked.result.rules.find((r) => r.code === code).findings.some((f) => f.location.includes('API 识图')));
+      assert.ok(checked.result.rules.find((r) => r.code === code).findings.some((f) =>
+        f.location.includes('API 识图') && f.location.includes(visionRow)));
     }
     assert.ok(checked.result.rules.find((r) => r.code === 'C002').findings.some((f) =>
       f.status === '需核实' && f.detail.includes('格式')));

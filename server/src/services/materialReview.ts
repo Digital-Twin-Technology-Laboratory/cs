@@ -41,10 +41,26 @@ export const safeForAi = new Set([
 ]);
 const personal = /学\s*[号籍]|考生\s*(?:姓名|号)|学生\s*姓名|逐人\s*成绩|\b\d{7,}\b/;
 const possibleScoreRow = /[\u4e00-\u9fa5]{2,4}\s*[|｜,，]\s*\d{1,3}\s*[|｜,，]\s*\d{1,3}/;
-const teachingHoursTable = /^【表格】\n\| 教学内容 \| 理论(?:学时)? \| (?:实验(?:[\/／]实践)?|实践)(?:学时)? \| 小计 \|.*(?:\n\|.*)*/gm;
-// 只有疑似成绩行的判断跳过学时表；全篇仍核对明确的个人信息线索。
-export const containsStudentDetails = (text: string) =>
-  personal.test(text) || possibleScoreRow.test(text.replace(teachingHoursTable, '\n'));
+const hoursValue = /^(?:\d+(?:\.\d+)?(?:[（(]\d+(?:\.\d+)?[）)])?|[-—–/])?$/;
+export function containsStudentDetails(text: string) {
+  if (personal.test(text)) return true;
+  // 模型识图和文档提取的表格标记不同，按学时表头和列值识别。
+  let inHoursTable = false;
+  const otherLines = text.split(/\r?\n/).filter((line) => {
+    const columns = line.trim().replace(/^[|｜]|[|｜]$/g, '').split(/[|｜]/).map((cell) => cell.trim());
+    const [content, theory, practice, total] = columns;
+    if (/^(?:教学内容|授课内容|教学章节)$/.test(content) && /^理论(?:学时)?$/.test(theory) &&
+      /^(?:实验(?:[\/／]实践)?|实践)(?:学时)?$/.test(practice) && /^(?:小计|合计|总学时)$/.test(total)) {
+      inHoursTable = true;
+      return false;
+    }
+    if (inHoursTable && (columns.every((cell) => /^:?-{3,}:?$/.test(cell)) ||
+      (columns.length >= 4 && content && [theory, practice, total].every((cell) => hoursValue.test(cell))))) return false;
+    inHoursTable = false;
+    return true;
+  });
+  return possibleScoreRow.test(otherLines.join('\n'));
+}
 export const canSendPageToAi = (page: MaterialPage) =>
   (!page.ocr || page.vision) && !page.warning && !!page.text.trim() && !containsStudentDetails(page.text);
 const aiOutput = z.object({ items: z.array(z.unknown()) });
