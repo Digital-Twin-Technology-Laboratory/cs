@@ -92,8 +92,7 @@ npm run dev
 - 同一类型可上传多份，支持 `.docx`、`.xls`、`.xlsx`、`.pptx`、`.pdf`、`.jpg/.jpeg`、`.png`。旧版 `.doc`、`.ppt` 请另存为新版格式，幻灯片图表或纯图片内容请转为 PDF。页面和 Word 报告均可回查；识别不足或无法判断条款是否适用时记为「需核实」。
 - 列表支持查看、编辑和删除档案。建档人、全院教学条线和管理员可编辑或删除有权访问的档案；排队或检查中不可修改。编辑不改历史报告；删除会一并删除附件和历史报告，不退回已用检查次数。
 - 规则内置为 `workbook-v1`。更新原工作簿后，运行 `node scripts/generate-material-checklist.mjs <工作簿.xlsx> <新版本号>` 并核对适用条件，以新版本重新构建。历史报告不随规则变化重算。专项复核只检查上传的现有台账，不创建新的整改派单流程。
-- **启用扫描成绩单和照片读取**：在项目根目录用 Python 3.11 或 3.12 执行 `python -m venv .venv-material-ocr`，再在 Windows 执行 `.\.venv-material-ocr\Scripts\python.exe -m pip install -r scripts/material-ocr-requirements.txt`；macOS／Linux 使用 `.venv-material-ocr/bin/python -m pip install -r scripts/material-ocr-requirements.txt`。应用自动使用该虚拟环境，也可用 `MATERIAL_OCR_PYTHON` 指定其他解释器。依赖装好后 OCR 在服务器本地运行，不需要在线识别接口。未安装时，电子文件仍可检查，图片显示待核及缺少识别组件的提示。
-- **通过 AI 接口识图**：在「AI 配置」中启用支持图片输入的模型（OpenAI 兼容或 Anthropic 接口）。上传已脱敏的普通教学材料 JPG／PNG 并开始检查，系统自动把图片发送到当前接口，识别出的文字参与检查。API 识图单张限 5 MB；未配置接口、识别失败或图片过大时使用本地 OCR。扫描 PDF 仍走本地 OCR。请对照原件复核识别结果。
+- **通过 AI 接口识图**：在「AI 配置」中启用支持图片输入的模型（OpenAI 兼容或 Anthropic 接口）。上传已脱敏的普通教学材料 JPG／PNG 并开始检查，系统自动把图片发送到当前接口，识别出的文字参与检查。API 识图单张限 5 MB；未识别的图片和无文字层的 PDF 页面提示人工核实。请对照原件复核识别结果。
 - 成绩表、学生答卷等受保护材料不发送图片或学生明细给外部模型。逐人成绩只在服务器上复算和比对；校正识别值后重新检查即可生成新版本，不修改原文件或正式成绩。支撑材料如含学生明细，先脱敏或使用人工核实。
 
 ## 大纲专项检查规则要点

@@ -1,2 +1,0 @@
-rapidocr-onnxruntime==1.4.4
-pypdfium2>=4.30,<6

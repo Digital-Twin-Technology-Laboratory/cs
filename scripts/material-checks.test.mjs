@@ -42,6 +42,8 @@ test('course and college material checks preserve scope, quantified differences,
   const visionRequests = [];
   const visionText = '平时40%，期末60%';
   let rejectImage = false;
+  let imageReviewAttempts = 0;
+  let invalidReview = false;
   const model = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -81,8 +83,13 @@ test('course and college material checks preserve scope, quantified differences,
       detail: rule.code === 'C095' ? '汇报声称覆盖全部课程，支撑材料仅覆盖一个教学班。' : '已核对所引原文。',
       evidence: rule.sources.slice(0, 1).map((key) => ({ source: key, quote: input.sources.find((s) => s.key === key).text.split('\n')[0] })),
     }));
+    if (input.rules?.some((rule) => rule.code === 'C001') && input.sources.some((s) => s.location.includes('API 识图'))) {
+      imageReviewAttempts++;
+      items.find((item) => item.code === 'C002').evidence = null;
+      items.find((item) => item.code === (imageReviewAttempts === 1 ? 'C003' : 'C001')).status = '格式不符';
+    }
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items }) }, finish_reason: 'stop' }], model: 'mock' }));
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: invalidReview ? null : items }) }, finish_reason: 'stop' }], model: 'mock' }));
   });
   model.listen(0, '127.0.0.1');
   await once(model, 'listening');
@@ -92,7 +99,7 @@ test('course and college material checks preserve scope, quantified differences,
   const port = reservation.address().port;
   await new Promise((resolve) => reservation.close(resolve));
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/index.ts'], {
-    env: { ...process.env, DATA_DIR: dataDir, HOST: '127.0.0.1', PORT: String(port), MATERIAL_OCR_PYTHON: path.join(dataDir, 'no-python') },
+    env: { ...process.env, DATA_DIR: dataDir, HOST: '127.0.0.1', PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -141,13 +148,15 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal(r.status, 201, JSON.stringify(r.data));
     return r.data.id;
   }
-  async function check(request, endpoint, options = {}) {
+  async function check(request, endpoint, options = {}, expected = 'done') {
     const run = await request(`${endpoint}/runs`, options);
     assert.equal(run.status, 201, JSON.stringify(run.data));
     for (let i = 0; i < 140; i++) {
       const { data } = await request(`${endpoint}/runs/${run.data.id}`);
-      if (data.status === 'done') return data;
-      assert.notEqual(data.status, 'failed', JSON.stringify(data));
+      if (data.status === 'done' || data.status === 'failed') {
+        assert.equal(data.status, expected, JSON.stringify(data));
+        return data;
+      }
       await delay(50);
     }
     assert.fail(output);
@@ -333,7 +342,7 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal((await admin(endpoint)).data.scope.section, '第12教学班');
   });
 
-  await t.test('ordinary images automatically reach the AI API, with local fallback and protected grades', async () => {
+  await t.test('ordinary images reach the AI API and unrecognized pages require review', async () => {
     const created = await admin(base, { ...scope, title: '图片识别测试' });
     assert.equal(created.status, 201);
     const endpoint = `${base}/${created.data.id}`;
@@ -346,22 +355,51 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal(request.response_format, undefined);
     assert.deepEqual(request.messages.at(-1).content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } });
     assert.deepEqual(checked.result.files.find((f) => f.id === outlineId).warnings, []);
-    assert.match(checked.result.files.find((f) => f.id === gradeId).warnings[0], /本地/);
+    assert.match(checked.result.files.find((f) => f.id === gradeId).warnings[0], /未进行 AI 识图/);
     assert.ok(modelRequests.some((r) => r.sources.some((s) => s.location.includes('API 识图') && s.text === visionText)));
+    assert.equal(imageReviewAttempts, 2);
+    for (const code of ['C001', 'C003']) {
+      assert.ok(checked.result.rules.find((r) => r.code === code).findings.some((f) => f.location.includes('API 识图')));
+    }
+    assert.ok(checked.result.rules.find((r) => r.code === 'C002').findings.some((f) =>
+      f.status === '需核实' && f.detail.includes('格式')));
+
+    invalidReview = true;
+    const failed = await check(admin, endpoint, {}, 'failed');
+    assert.match(failed.error, /重试后仍未返回有效检查结果/);
+    invalidReview = false;
 
     rejectImage = true;
-    const local = await check(admin, endpoint);
-    assert.equal(visionRequests.length, 2);
-    const warning = local.result.files.find((f) => f.id === outlineId).warnings[0];
-    assert.match(warning, /支持图片输入.*本地/);
-    assert.doesNotMatch(warning, /base64/);
+    // Page 1 has a short text layer; page 2 has no text.
+    const pdf = Buffer.from([
+      '%PDF-1.4',
+      '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj',
+      '2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj',
+      '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 180 80] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>\nendobj',
+      '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 180 80] >>\nendobj',
+      '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj',
+      '6 0 obj\n<< /Length 48 >>\nstream\nBT /F1 12 Tf 10 40 Td (Text layer example) Tj ET\nendstream\nendobj',
+      'xref\n0 7\n0000000000 65535 f ',
+      ...[9, 58, 121, 246, 316, 386].map((offset) => `${String(offset).padStart(10, '0')} 00000 n `),
+      'trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n484\n%%EOF\n',
+    ].join('\n'));
+    const pdfId = await add(admin, endpoint, '教学进度表（教学日历）', pdf, '教学日历.pdf');
+    const reviewed = await check(admin, endpoint);
+    assert.equal(visionRequests.length, 3);
+    const warning = reviewed.result.files.find((f) => f.id === outlineId).warnings[0];
+    assert.match(warning, /支持图片输入/);
+    assert.doesNotMatch(warning, /base64|本地/);
+    const pdfWarnings = reviewed.result.files.find((f) => f.id === pdfId).warnings;
+    assert.equal(pdfWarnings.length, 1);
+    assert.match(pdfWarnings[0], /第 2 页.*没有可提取的文字/);
+    assert.ok(modelRequests.some((r) => r.sources.some((s) => s.text.includes('Text layer example'))));
   });
 
   await t.test('Anthropic sends an image as a base64 content block', async () => {
     const image = { mediaType: 'image/jpeg', data: '/9j/4AAQSkZJRgABAQAAAQABAAD/' };
     const response = await callAnthropic({ apiKey: 'mock-key', baseUrl: `http://127.0.0.1:${model.address().port}`,
       model: 'mock', maxTokens: 512, timeoutSec: 5, effort: 'low', anthropicFallback: true, structured: false,
-      system: 'OCR', user: 'Transcribe image', image });
+      system: 'Transcribe image', user: 'Transcribe image', image });
     assert.deepEqual(visionRequests.at(-1).messages[0].content, [
       { type: 'text', text: 'Transcribe image' },
       { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
@@ -369,36 +407,4 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal(visionRequests.at(-1).thinking, undefined);
     assert.equal(response.text, visionText);
   });
-});
-
-test('provided phone picture and image-only PDF: rotate without mixing scores, keep zero and dash distinct', {
-  skip: !process.env.MATERIAL_OCR_SAMPLE, timeout: 120000,
-}, async () => {
-  const { extractMaterial } = await import('../server/src/services/materialExtract.ts');
-  const { extractGradeRows, materialWeights } = await import('../server/src/services/materialGrades.ts');
-  for (const filename of [process.env.MATERIAL_OCR_SAMPLE, process.env.MATERIAL_OCR_PDF_SAMPLE].filter(Boolean)) {
-    const pages = await extractMaterial(filename, path.basename(filename), true);
-    const rows = extractGradeRows(pages);
-    assert.deepEqual(materialWeights(pages), { 平时: 10, 期中: 15, 实验: 15, 期末: 60 });
-    assert.deepEqual(rows.map((r) => r.line), Array.from({ length: 26 }, (_, i) => i + 43));
-    const expected = [
-      '91 27 83 60 62', '96 12 85 67 64', '95 62 90 85 83', '95 58 92 86 84',
-      '94 20 90 73 70', '92 62 92 86 84', '95 52 88 85 82', '95 — 87 83 85',
-      '95 27 84 69 68', '90 38 86 78 74', '78 20 85 87 76', '91 — 88 70 75',
-      '92 39 80 83 77', '82 32 85 83 76', '91 66 90 88 85', '95 48 89 91 85',
-      '95 25 0 43 39', '91 30 90 61 64', '90 44 87 85 80', '95 58 94 96 90',
-      '82 28 78 66 64', '91 20 75 74 68', '91 35 90 67 68', '86 30 70 74 68',
-      '95 39 92 79 77', '93 90 97 91 92',
-    ];
-    const keys = ['平时', '期中', '实验', '期末', '总评'];
-    for (const [i, row] of rows.entries()) {
-      assert.ok(!row.cells.学号 || row.uncertain.includes('学号'));
-      for (const [j, key] of keys.entries()) {
-        assert.ok(row.cells[key] === expected[i].split(' ')[j] || row.uncertain.includes(key), `${row.line} ${key}: ${row.cells[key]}`);
-      }
-    }
-    assert.equal(rows.find((r) => r.line === 59).cells.实验, '0');
-    assert.ok(rows.find((r) => r.line === 50).cells.期中 === '—' || rows.find((r) => r.line === 50).uncertain.includes('期中'));
-    assert.equal(rows.filter((r) => r.cells.总评 && !r.uncertain.includes('总评')).length, 26);
-  }
 });
