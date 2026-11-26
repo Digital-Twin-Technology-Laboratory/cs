@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { Router, type Request, type Response } from 'express';
-import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
+import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import { z } from 'zod';
 import { InvalidInputError, InvalidSpreadsheetError, SheetNotFoundError } from 'read-excel-file/node';
 import { requireAuth, type PublicUser } from '../auth.js';
@@ -12,6 +12,7 @@ import { availableMaterials, optionalMaterials, flags, materialScopeSchema, mate
 import { MATERIAL_EXTENSIONS } from '../services/materialExtract.js';
 import { EXCEL_EXTENSIONS } from '../services/xlsWorkbook.js';
 import { extractGradeRows, GRADE_TYPES, materialWeights } from '../services/materialGrades.js';
+import { materialIssueGroups } from '../services/materialIssues.js';
 import { canAccessMaterial, filePages, fullAccess, type MaterialCaseRow, type MaterialFileRow, type MaterialRunRow, type RunSnapshot } from '../services/materialRuns.js';
 import type { MaterialResult } from '../services/materialReview.js';
 import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
@@ -365,9 +366,10 @@ materialsRouter.get('/:caseId/runs/:runId', (req, res) => {
   if (!entry) return;
   const run = findRun(entry.row.id, req, res);
   if (!run) return;
+  const result = run.result_json ? resultForUser(run, req.user!) : null;
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ id: run.id, version: run.version, status: run.status, error: run.error,
-    result: run.result_json ? resultForUser(run, req.user!) : null });
+    result: result && { ...result, issueGroups: materialIssueGroups(result) } });
 });
 
 function resultForUser(run: MaterialRunRow, user: PublicUser) {
@@ -384,42 +386,27 @@ materialsRouter.get('/:caseId/runs/:runId/report.docx', async (req, res) => {
   if (!run.result_json) return res.status(409).json({ error: '检查尚未生成报告' });
   const r = resultForUser(run, req.user!);
   const { scope } = JSON.parse(run.snapshot_json) as RunSnapshot;
-  const types = [...new Set([...r.files.map((f) => f.type), ...r.rules.filter((rule) => rule.status !== '不适用').flatMap((rule) => rule.materials)])];
-  const doc = new Document({ sections: [{ children: [
-    new Paragraph({ text: '全套教学材料检查报告', heading: HeadingLevel.TITLE }),
+  const groups = materialIssueGroups(r);
+  const doc = new Document({ styles: { default: { title: { run: { color: '000000' } }, heading1: { run: { color: '000000' } } } }, sections: [{ children: [
+    new Paragraph({ text: '教学材料问题汇总', heading: HeadingLevel.TITLE }),
     new Paragraph([scope.title, scope.term, scope.section, scope.major, scope.group].filter(Boolean).join(' · ')),
-    new Paragraph(`结论：${results[r.verdict]} · 规则 ${run.version} · 检查 #${run.id} · ${run.finished_at}`),
-    new Paragraph('本报告仅针对本次送检材料。请结合原件核实；报告和计算结果不修改正式成绩。'),
-    new Paragraph({ text: '按材料查', heading: HeadingLevel.HEADING_1 }),
-    ...types.flatMap((type) => {
-      const files = r.files.filter((f) => f.type === type);
-      const rules = r.rules.filter((rule) => rule.materials.includes(type) && rule.status !== '不适用');
-      return [new Paragraph({ text: type, heading: HeadingLevel.HEADING_2 }),
-        ...files.map((f) => new Paragraph(`${f.name}${f.id ? `（附件 #${f.id}）` : '（系统引用）'}${f.warnings.length ? ' · ' + f.warnings.join('；') : ''}`)),
-        ...(!files.length ? [new Paragraph('本次未上传')] : []),
-        new Paragraph(rules.map((rule) => `${rule.code} ${rule.title}：${rule.status}`).join('；'))];
-    }),
-    new Paragraph({ text: '按问题查', heading: HeadingLevel.HEADING_1 }),
-    ...r.rules.flatMap((rule) => [
-      new Paragraph({ text: `${rule.code} ${rule.title} · ${rule.status}`, heading: HeadingLevel.HEADING_2 }),
-      ...rule.findings.map((f) => new Paragraph([f.status, f.location, f.detail].filter(Boolean).join(' | '))),
+    new Paragraph(`常规检查：${results[r.verdict]} · 检查 #${run.id} · ${run.finished_at}`),
+    new Paragraph(groups.length ? groups.map(({ label, issues }) => `${label} ${issues.length} 项`).join('　') : '本次没有需要处理的事项。'),
+    ...groups.flatMap(({ label, issues }) => [
+      new Paragraph({ text: label, heading: HeadingLevel.HEADING_1 }),
+      ...issues.flatMap((issue, i) => {
+        const notes = [
+          issue.history && `往期反馈：${issue.history}`,
+          ...issue.locations.map((location) => `位置：${location}`),
+          issue.materials.length && `涉及材料：${issue.materials.join('、')}`,
+          issue.checks.length && `检查项：${issue.checks.map(({ code, title }) => `${code} ${title}`).join('；')}`,
+        ].filter((note): note is string => !!note);
+        return [new Paragraph({ text: `${i + 1}. ${issue.detail}`, spacing: { before: 120 }, keepNext: !!notes.length }),
+          ...notes.map((note) => new Paragraph({ children: [new TextRun({ text: note, color: '475569', size: 20 })] }))];
+      }),
     ]),
-    ...(r.history ? [
-      new Paragraph({ text: '历史问题复查', heading: HeadingLevel.HEADING_1 }),
-      ...(!r.history.length ? [new Paragraph('没有匹配到可复查的历史问题。')] : []),
-      ...r.history.flatMap((row) => [
-        new Paragraph(`历史反馈（${[row.issue.term || row.issue.date, row.issue.source, row.issue.position].filter(Boolean).join(' · ')}）`),
-        ...row.issue.text.split(/\r?\n/).map((line) => new Paragraph(line)),
-        new Paragraph(`${row.status}：${row.detail}`),
-        ...row.locations.map((location) => new Paragraph(`${location.file} · ${location.position}`)),
-      ]),
-    ] : []),
-    ...(r.stats.length ? [new Paragraph({ text: '成绩统计（本次可计算范围）', heading: HeadingLevel.HEADING_1 })] : []),
-    ...r.stats.flatMap((sample) => [new Paragraph(`${sample.file}（附件 #${sample.id}）`),
-      new Paragraph(Object.entries(sample.weights).map(([key, value]) => `${key} ${value}%`).join('、')),
-      ...sample.stats.map((s) => new Paragraph(`${s.column}：识别 ${s.rows} 行，可统计 ${s.count} 行，特殊状态 ${s.excluded} 行，待核 ${s.unreadable} 行，均分 ${s.mean?.toFixed(2) ?? '待核实'}；各分段（<60 / 60–69 / 70–79 / 80–89 / ≥90）人数 ${s.bands.join(' / ')}`))]),
   ] }] });
   const buffer = await Packer.toBuffer(doc);
   res.setHeader('Cache-Control', 'private, no-store');
-  res.attachment(`${scope.title.replace(/[<>:"/\\|?*]/g, '_')}-材料检查-${run.id}.docx`).send(buffer);
+  res.attachment(`${scope.title.replace(/[<>:"/\\|?*]/g, '_')}-材料问题汇总-${run.id}.docx`).send(buffer);
 });

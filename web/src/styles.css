@@ -352,6 +352,38 @@ body {
 .small {
   font-size: 13px;
 }
+.material-issues {
+  max-width: 75ch;
+  overflow-wrap: anywhere;
+}
+
+.material-issues section + section {
+  margin-top: 24px;
+}
+
+.material-issues h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.material-issues h3 .ant-tag {
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.material-issues ol {
+  margin: 0;
+  padding-inline-start: 24px;
+}
+
+.material-issues li + li {
+  margin-top: 12px;
+}
+
+.material-issue-detail {
+  font-weight: 600;
+}
+
 .section-title {
   font-size: 16px;
   font-weight: 600;

@@ -11,6 +11,7 @@ import { Document, Packer, Paragraph, Table, TableCell, TableRow } from 'docx';
 import JSZip from 'jszip';
 import XLSX from 'xlsx';
 import { callAnthropic } from '../server/src/services/ai/anthropic.ts';
+import { materialIssueGroups } from '../server/src/services/materialIssues.ts';
 
 const scope = { level: 'course', title: '程序设计', term: '2026-2027 第1学期', section: '1班',
   major: '计算机科学与技术', teaching: 'theory', assessments: ['other'], flags: [], rounding: 'integer' };
@@ -35,6 +36,32 @@ function xls(rows) {
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), '反馈明细');
   return XLSX.write(book, { bookType: 'biff8', type: 'buffer' });
 }
+
+test('issue summary merges repeated findings and missing material without dropping distinct locations', () => {
+  const at = (line, quote) => `大纲.docx（附件 #1） · 文档正文 · 提取文本第 ${line} 行：「${quote}」`;
+  const shared = { status: '需整改', location: `${at(8, '长摘录\n第二行')}\n${at(12, '另一段摘录')}`, detail: '学时小计不一致，请重新合计。' };
+  const missing = { status: '待补', location: '实验报告、实践报告', detail: '本次未提供适用的材料' };
+  const verify = { status: '需核实', location: '', detail: '请人工核实。' };
+  const rule = (code, findings, materials = ['课程教学大纲']) => ({ code, title: code, materials, status: findings[0].status, findings });
+  const groups = materialIssueGroups({ files: [{ id: 1, type: '课程教学大纲' }], rules: [
+    rule('C001', [shared, { ...shared, location: at(21, '另一处') }]),
+    rule('C002', [{ ...shared, location: `${at(12, '另一段摘录')}\n${at(8, '同一行的另一段')}` }]),
+    rule('C003', [missing, verify], [missing.location]),
+    rule('C004', [missing, verify], ['课程教学大纲', missing.location]),
+    rule('C005', [{ ...verify, status: '未发现问题' }]),
+    rule('S001', [{ ...verify, status: '建议完善', detail: '建议标明适用年级。' }]),
+  ], history: [
+    { status: '待补', missing: ['实验报告、实践报告'] },
+    { status: '需核实', issue: { text: '未注明课程负责人。' }, detail: '请核实签字栏。', locations: [{ file: '大纲.docx', position: '封面' }] },
+  ] });
+  assert.deepEqual(groups.map(({ status, issues }) => [status, issues.length]), [['需整改', 2], ['待补', 1], ['需核实', 2], ['建议完善', 1]]);
+  assert.deepEqual(groups[0].issues[0].checks.map(({ code }) => code), ['C001', 'C002']);
+  assert.deepEqual(groups[0].issues[0].locations, ['大纲.docx（附件 #1） · 文档正文 · 提取文本第 8、12 行']);
+  assert.equal(groups[1].issues[0].detail, '实验报告、实践报告');
+  assert.deepEqual(groups[2].issues[0].checks.map(({ code }) => code), ['C004']);
+  assert.equal(groups[2].issues[1].history, '未注明课程负责人。');
+  assert.deepEqual(groups[2].issues[1].locations, ['大纲.docx · 封面']);
+});
 
 test('course and college material checks preserve scope, quantified differences, reports and quota', { timeout: 45000 }, async (t) => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), 'cs-material-tests-'));
@@ -226,9 +253,11 @@ test('course and college material checks preserve scope, quantified differences,
   assert.doesNotMatch(oldXml, /已编辑/);
   const docx = await teacher(`${course}/runs/${second.id}/report.docx`);
   const xml = await (await JSZip.loadAsync(docx.data)).file('word/document.xml').async('string');
-  assert.match(xml, /按材料查/);
-  assert.match(xml, /按问题查/);
-  assert.match(xml, /30% 与 40%/);
+  assert.match(xml, /教学材料问题汇总/);
+  assert.equal((xml.match(/30% 与 40%/g) ?? []).length, 1);
+  assert.doesNotMatch(xml, /按材料查|按问题查|成绩统计|不适用|已核对所引原文|：「/);
+  assert.ok(second.result.issueGroups.some((group) => group.status === '需整改' &&
+    group.issues.some((issue) => /30% 与 40%/.test(issue.detail) && issue.locations.some((loc) => loc.includes('大纲.docx')))));
   assert.doesNotMatch(xml, /202600101|隐私样例/);
   const change = await teacher(`${course}/files/${gradeId}/grades`, {
     edits: gradeTable.rows.map((row, i) => ({ location: row.location, line: row.line, column: '总评', value: ['87', '42'][i] })),
@@ -342,9 +371,9 @@ test('course and college material checks preserve scope, quantified differences,
     assert.deepEqual(missing.missing, ['学生答卷']);
     const report = await admin(`${endpoint}/runs/${reviewed.id}/report.docx`);
     const reportText = await (await JSZip.loadAsync(report.data)).file('word/document.xml').async('string');
-    assert.match(reportText, /历史问题复查/);
-    assert.match(reportText, /学生答卷改分未签字/);
-    assert.match(reportText, /本次大纲\.xls · 工作表 反馈明细 · 第 3 行/);
+    assert.match(reportText, /待补材料/);
+    assert.match(reportText, /学生答卷/);
+    assert.doesNotMatch(reportText, /本次表格已明确考核比例/);
     const skipped = await check(admin, endpoint, { reviewHistory: false });
     assert.deepEqual(skipped.result.rules, reviewed.result.rules);
     assert.equal(skipped.result.history, undefined);

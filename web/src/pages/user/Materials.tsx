@@ -28,9 +28,13 @@ type GradeRow = { location: string; line: number; cells: Record<string, string>;
 type GradeEdit = { location: string; line: number; column: string; value: string };
 type GradeData = { rows: GradeRow[]; edits: GradeEdit[]; weights: Record<string, number>; weightEdits: Record<string, number> | null;
   scanned: boolean; weightsVerified: boolean };
-type Finding = { status: string; location: string; detail: string };
-type Rule = { code: string; title: string; materials: string[]; status: string; findings: Finding[] };
+type Check = { code: string; title: string };
+type Rule = Check & { materials: string[]; status: string };
+type IssueGroup = { status: string; label: string; issues: {
+  detail: string; locations: string[]; materials: string[]; checks: Check[]; history?: string;
+}[] };
 type Result = { verdict: keyof typeof verdictNames; rules: Rule[]; files: { id: number; name: string; type: string; warnings: string[] }[];
+  issueGroups: IssueGroup[];
   history?: { issue: HistoryIssue; status: string; detail: string; locations: { fileId: number; file: string; position: string }[] }[];
   stats: { id: number; file: string; weights: Record<string, number>; stats: { column: string; count: number; rows: number; excluded: number; unreadable: number; mean: number | null; bands: number[] }[] }[] };
 
@@ -329,7 +333,7 @@ function CaseDetail({ id }: { id: string }) {
               </Space>) : row.type === planType && entry.plan ? <Tag color="blue">已引用：{entry.plan.name}</Tag> : <Tag color="gold">待补</Tag> },
           ]} />
       </Card>
-      <Card title="检查结果" extra={selected?.status === 'done' && <Button onClick={() => download(`${url}/runs/${runId}/report.docx`)}>下载 Word 报告</Button>}>
+      <Card title="检查结果" extra={selected?.status === 'done' && <Button type="primary" onClick={() => download(`${url}/runs/${runId}/report.docx`)}>下载问题汇总（Word）</Button>}>
         {entry.runs.length ? <>
           <Select aria-label="检查版本" value={runId} onChange={setRunId} style={{ width: 'min(100%, 410px)', marginBottom: 16 }} options={entry.runs.map((r) =>
             ({ value: r.id, label: `#${r.id} · ${r.created_at} · ${statusNames[r.status]}` }))} />
@@ -360,23 +364,41 @@ function CaseDetail({ id }: { id: string }) {
 }
 
 function ResultView({ url, result, onVerify }: { url: string; result: Result; onVerify?: (rule: Rule) => void }) {
-  const [filter, setFilter] = useState('applicable');
-  const types = [...new Set([...result.files.map((f) => f.type), ...result.rules.filter((r) => r.status !== '不适用').flatMap((r) => r.materials)])];
+  const types = [...new Set(result.files.map((f) => f.type))];
+  const verifiable = new Map(result.rules.filter((rule) => rule.status === '需核实' && rule.materials.length).map((rule) => [rule.code, rule]));
+  const issueCount = result.issueGroups.reduce((count, group) => count + group.issues.length, 0);
   return <Space direction="vertical" style={{ width: '100%' }} size="middle">
     <Alert showIcon type={result.verdict === 'passed' ? 'success' : result.verdict === 'partial' ? 'warning' : 'error'}
-      message={verdictNames[result.verdict]} description="结论仅针对这次检查的材料。需核实的内容请对照原件，复算不修改正式成绩。" />
+      message={`常规检查：${verdictNames[result.verdict]}`} />
     <Tabs items={[
-      { key: 'material', label: '按材料查', children: <Collapse items={types.map((type) => {
+      { key: 'issues', label: `问题汇总（${issueCount}）`, children: result.issueGroups.length ? <div className="material-issues">
+        {result.issueGroups.map(({ status, label, issues }) => <section key={status}>
+          <h3><Tag color={colors[status]}>{label}</Tag><span className="muted">{issues.length} 项</span></h3>
+          <ol>{issues.map((issue, i) => <li key={i}>
+            <div className="material-issue-detail">{issue.detail}</div>
+            {issue.history && <div className="muted">往期反馈：{issue.history}</div>}
+            {issue.locations.map((location) => <div className="muted" key={location}>位置：{location}</div>)}
+            {!!issue.materials.length && <div className="muted">涉及材料：{issue.materials.join('、')}</div>}
+            {!!issue.checks.length && <div className="muted">检查项：{issue.checks.map((check, index) => {
+              const rule = status === '需核实' && verifiable.get(check.code);
+              return <span key={check.code}>{index > 0 && '；'}{rule && onVerify
+                ? <Button type="link" size="small" style={{ paddingInline: 0, whiteSpace: 'normal', height: 'auto', textAlign: 'start' }} onClick={() => onVerify(rule)}>核实 {check.code} {check.title}</Button>
+                : `${check.code} ${check.title}`}</span>;
+            })}</div>}
+          </li>)}</ol>
+        </section>)}
+      </div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次没有需要处理的事项" /> },
+      { key: 'material', label: '材料与成绩统计', children: <Collapse items={types.map((type) => {
         const files = result.files.filter((f) => f.type === type);
-        const relevant = result.rules.filter((r) => r.status !== '不适用' && r.materials.includes(type));
         const stats = result.stats.filter((s) => files.some((f) => f.id === s.id));
-        return { key: type, label: <Space wrap>{type}<Tag color={files.length ? 'blue' : 'gold'}>{files.length ? `${files.length} 份` : '待补'}</Tag></Space>,
+        return { key: type, label: <Space wrap>{type}<Tag color="blue">{files.length} 份</Tag></Space>,
           children: <Space direction="vertical">
             {files.map((f) => <div key={f.id}>{f.id
               ? <Button type="link" onClick={() => download(`${url}/files/${f.id}/original`)}>{f.name}</Button>
               : <Tag>已引用：{f.name}</Tag>}
               {f.warnings.map((w, i) => <Alert key={i} type="warning" message={w} />)}
             </div>)}
+            {!!stats.length && <div className="muted">复算仅用于核对，不修改正式成绩。</div>}
             {stats.map((s) => <div key={s.id}>
               <div>识别到的权重：{Object.entries(s.weights).map(([key, value]) => `${key} ${value}%`).join('、') || '待核实'}</div>
               {s.stats.map((item) => <div key={item.column}>
@@ -384,27 +406,8 @@ function ResultView({ url, result, onVerify }: { url: string; result: Result; on
                 均分 {item.mean?.toFixed(2) ?? '—'}；各分段人数（&lt;60／60–69／70–79／80–89／≥90）{item.bands.join('／')}
               </div>)}
             </div>)}
-            {relevant.map((r) => <div key={r.code}><Tag color={colors[r.status]}>{r.status}</Tag>{r.code} {r.title}
-              {r.findings.filter((f) => f.status !== '未发现问题' && f.status !== '待补').map((f, i) =>
-                <div key={i} className="muted">{f.detail}{f.location && <div style={{ whiteSpace: 'pre-wrap' }}>{f.location}</div>}</div>)}
-            </div>)}
           </Space> };
       })} /> },
-      { key: 'rules', label: '按问题查', children: <Space direction="vertical" style={{ width: '100%' }}>
-        <Select aria-label="筛选检查项" value={filter} onChange={setFilter} style={{ width: 210 }}
-          options={[{ label: '全部适用项', value: 'applicable' }, { label: '全部条款（含不适用）', value: 'all' }, ...options(Object.keys(colors))]} />
-        <Collapse items={result.rules.filter((r) => filter === 'all' || (filter === 'applicable' ? r.status !== '不适用' : r.status === filter)).map((r) => ({
-          key: r.code, label: <Space wrap><Tag color={colors[r.status]}>{r.status}</Tag>{r.code} {r.title}</Space>,
-          children: <Space direction="vertical">
-            {!!r.materials.length && <div className="muted">涉及材料：{r.materials.join('、')}</div>}
-            {r.findings.map((f, i) => <div key={i}>
-              <Tag color={colors[f.status]}>{f.status}</Tag>{f.detail}
-              {f.location && <div className="muted" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 4 }}>{f.location}</div>}
-            </div>)}
-            {r.status === '需核实' && !!r.materials.length && onVerify && <Button onClick={() => onVerify(r)}>记录人工核实</Button>}
-          </Space>,
-        }))} />
-      </Space> },
       ...(result.history ? [{ key: 'history', label: `历史问题复查（${result.history.length}）`,
         children: <Table rowKey={(r) => r.issue.id} dataSource={result.history} size="small" scroll={{ x: 800 }}
           pagination={{ pageSize: 12 }} locale={{ emptyText: '没有匹配到可复查的历史问题。常规清单检查已照常完成。' }}
