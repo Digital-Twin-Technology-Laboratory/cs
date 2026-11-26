@@ -4,6 +4,7 @@ import { CsvError, parse } from 'csv-parse/sync';
 import readXlsxFile, { InvalidInputError, InvalidSpreadsheetError, SheetNotFoundError } from 'read-excel-file/node';
 import { RosterImportError } from './rosterImport.js';
 import { GROUP_PRESETS } from './supervisionRoles.js';
+import { readXlsWorkbook } from './xlsWorkbook.js';
 
 export interface OutlineImportRow {
   source_key: string;
@@ -79,11 +80,12 @@ function importTable(table: unknown[][], name: string) {
 
 export async function readOutlineFile(file: Express.Multer.File) {
   const contents = await fs.readFile(file.path);
+  const name = file.originalname.toLowerCase();
   try {
-    if (file.originalname.toLowerCase().endsWith('.csv')) {
+    if (name.endsWith('.csv')) {
       return importTable(parse(contents, { bom: true, trim: true, skip_empty_lines: true }), file.originalname);
     }
-    const sheets = await readXlsxFile(contents, { parseNumber: (value) => value });
+    const sheets = name.endsWith('.xls') ? await readXlsWorkbook(contents) : await readXlsxFile(contents, { parseNumber: (value) => value });
     const sheet = sheets.find((candidate) => candidate.data.some((row) => ['课程名称', '课程组', '审核专业', '大纲执笔人'].every((column) => row.map(headerName).includes(column))));
     if (!sheet) throw new RosterImportError('Excel中未找到含课程名称、课程组、审核专业、大纲执笔人的工作表');
     return importTable(sheet.data, file.originalname);

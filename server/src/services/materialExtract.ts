@@ -10,8 +10,9 @@ import { extractTextItems, getDocumentProxy } from 'unpdf';
 import { ROOT_DIR } from '../config.js';
 import { docxToHtml, htmlToStructuredText } from './extract.js';
 import { pdfPageToStructuredText } from './pdfText.js';
+import { EXCEL_EXTENSIONS, readXlsWorkbook } from './xlsWorkbook.js';
 
-export const MATERIAL_EXTENSIONS = ['.docx', '.xlsx', '.pptx', '.pdf', '.jpg', '.jpeg', '.png'];
+export const MATERIAL_EXTENSIONS = ['.docx', ...EXCEL_EXTENSIONS, '.pptx', '.pdf', '.jpg', '.jpeg', '.png'];
 const exec = promisify(execFile);
 const win = process.platform === 'win32';
 const projectPython = path.join(ROOT_DIR, '.venv-material-ocr', win ? 'Scripts/python.exe' : 'bin/python');
@@ -45,9 +46,10 @@ export async function extractMaterial(file: string, name: string, gradeTable = f
     return [{ location: '文档正文', text: htmlToStructuredText(html), rows: parse(html).querySelectorAll('tr').map(
       (row) => row.querySelectorAll('td, th').map((cell) => cell.textContent.trim())) }];
   }
-  if (ext === '.xlsx') {
-    return (await readXlsxFile(file, { parseNumber: (value) => value })).map(({ sheet, data }) => {
-      const rows = data.map((row) => row.map((cell) => String(cell ?? '').trim()));
+  if (EXCEL_EXTENSIONS.includes(ext)) {
+    const sheets = ext === '.xls' ? await readXlsWorkbook(file) : await readXlsxFile(file, { parseNumber: (value) => value });
+    return sheets.map(({ sheet, data }) => {
+      const rows = data.map((row) => Array.from<unknown, string>(row, (cell) => String(cell ?? '').trim()));
       return { location: `工作表 ${sheet}`, text: rows.map((row, i) => `${i + 1}: ${row.join(' | ')}`).join('\n'), rows };
     });
   }

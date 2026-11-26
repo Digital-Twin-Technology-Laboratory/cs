@@ -64,10 +64,10 @@ export function HistoryImport() {
   const canKeep = unresolved.filter((row) => row.status === 'unmatched' && row.course.name);
   return <Card>
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert type="info" showIcon title="上传含多门课程的 .xlsx 文件，无需拆表。"
+      <Alert type="info" showIcon title="上传含多门课程的 .xls 或 .xlsx 文件，无需拆表。"
         description="使用「课程」或「课程代码」及「具体反馈」列；如有任课教师、工号、学期、来源文件和原表位置，也会一并保留。" />
       <Space wrap>
-        <input aria-label="选择历史问题 Excel" type="file" accept=".xlsx" disabled={busy} onChange={(e) => {
+        <input aria-label="选择历史问题 Excel" type="file" accept=".xls,.xlsx" disabled={busy} onChange={(e) => {
           setFile(e.currentTarget.files?.[0]); setPreview(undefined); setChoices({}); setOnlyFlagged(false); setSummary('');
         }} />
         <Button type="primary" disabled={!file || busy} loading={busy && !preview} onClick={() => file && void load(file)}>预览匹配</Button>

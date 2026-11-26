@@ -166,7 +166,7 @@ export default function ViewManagement() {
           <div className="muted small">如云文档限制读取，请导出 Excel 或 CSV 后切换到文件导入。</div>
         </Space> },
         { key: 'file', label: '导入导出文件', children: <Space orientation="vertical" style={{ width: '100%' }}>
-          <Upload accept=".xlsx,.csv" maxCount={1} fileList={files} beforeUpload={() => false} onChange={({ fileList }) => setFiles(fileList.slice(-1))} disabled={busy}><Button>选择云文档导出文件</Button></Upload>
+          <Upload accept=".xls,.xlsx,.csv" maxCount={1} fileList={files} beforeUpload={() => false} onChange={({ fileList }) => setFiles(fileList.slice(-1))} disabled={busy}><Button>选择云文档导出文件</Button></Upload>
           <Button type="primary" loading={busy} disabled={!files.length} onClick={() => importSource('file')}>导入课程清单</Button>
         </Space> },
       ]} />

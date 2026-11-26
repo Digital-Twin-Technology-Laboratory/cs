@@ -19,6 +19,7 @@ import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } 
 import { kickQueue } from '../services/checkQueue.js';
 import { getCheckQuota } from '../services/checkQuota.js';
 import { readRoster, RosterImportError } from '../services/rosterImport.js';
+import { EXCEL_EXTENSIONS } from '../services/xlsWorkbook.js';
 import { getOutlineRows, groupOutlinePeople, matchesOutline, summarizeOutlines } from '../services/outlineProgress.js';
 import { COLLEGE_PRESETS, GROUP_PRESETS } from '../services/supervisionRoles.js';
 import { passwordSchema } from './auth.js';
@@ -196,7 +197,7 @@ adminRouter.post('/users', (req, res) => {
   res.json({ id: r.lastInsertRowid });
 });
 
-adminRouter.post('/users/import', singleUpload(['.xlsx', '.csv']), async (req, res) => {
+adminRouter.post('/users/import', singleUpload([...EXCEL_EXTENSIONS, '.csv']), async (req, res) => {
   const file = req.file;
   try {
     if (!file) return res.status(400).json({ error: '请选择教工名单文件' });

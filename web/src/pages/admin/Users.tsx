@@ -344,9 +344,9 @@ export default function Users() {
           description="新导入账号的初始密码为 12345678，登录后可直接使用系统。已有工号会跳过，不修改原账号、密码或权限。"
           style={{ marginBottom: 16 }}
         />
-        <p>支持 Excel（.xlsx，第一个工作表）或 UTF-8 编码的 CSV。第一行包含“姓名”和“工号”两列，列顺序不限；工号列请设为文本，保留前导零。</p>
+        <p>支持 Excel（.xls、.xlsx，第一个工作表）或 UTF-8 编码的 CSV。第一行包含“姓名”和“工号”两列，列顺序不限；工号列请设为文本，保留前导零。</p>
         <Upload.Dragger
-          accept=".xlsx,.csv"
+          accept=".xls,.xlsx,.csv"
           maxCount={1}
           fileList={files}
           beforeUpload={() => false}

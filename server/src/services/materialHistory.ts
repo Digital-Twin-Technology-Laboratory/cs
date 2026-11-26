@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import type { PublicUser } from '../auth.js';
 import type { CheckResult } from './ai/schema.js';
 import type { MaterialScope } from './materialChecklist.js';
+import { readXlsWorkbook } from './xlsWorkbook.js';
 
 export type HistoryCourse = { name: string; code: string; major: string };
 type Teacher = { name: string; staffNo: string };
@@ -88,7 +89,9 @@ function identifyTeachers(teachers: Teacher[], directory: ReturnType<typeof teac
 }
 
 export async function previewHistory(path: string, fileName: string) {
-  const sheets = await readXlsxFile(path, { trim: false, parseNumber: (value) => value });
+  const sheets = fileName.toLowerCase().endsWith('.xls')
+    ? await readXlsWorkbook(path)
+    : await readXlsxFile(path, { trim: false, parseNumber: (value) => value });
   const courses = historyCourses();
   const directory = teacherDirectory();
   const rows: HistoryPreviewRow[] = [];

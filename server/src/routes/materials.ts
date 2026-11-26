@@ -10,6 +10,7 @@ import { findPlan, kickQueue } from '../services/checkQueue.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 import { availableMaterials, optionalMaterials, flags, materialScopeSchema, materialVersion, planMaterial, scopeRules, type MaterialScope } from '../services/materialChecklist.js';
 import { MATERIAL_EXTENSIONS } from '../services/materialExtract.js';
+import { EXCEL_EXTENSIONS } from '../services/xlsWorkbook.js';
 import { extractGradeRows, GRADE_TYPES, materialWeights } from '../services/materialGrades.js';
 import { canAccessMaterial, filePages, fullAccess, type MaterialCaseRow, type MaterialFileRow, type MaterialRunRow, type RunSnapshot } from '../services/materialRuns.js';
 import type { MaterialResult } from '../services/materialReview.js';
@@ -124,7 +125,7 @@ materialsRouter.get('/history', (req, res) => {
 materialsRouter.post(['/history/preview', '/history/import'], (req, res, next) => {
   if (!canManageHistory(req.user!)) return res.status(403).json({ error: '仅教学条线或管理员可以导入往期问题' });
   next();
-}, singleUpload(['.xlsx']), async (req, res) => {
+}, singleUpload(EXCEL_EXTENSIONS), async (req, res) => {
   const file = req.file;
   try {
     if (!file) return res.status(400).json({ error: '请选择要导入的 Excel' });

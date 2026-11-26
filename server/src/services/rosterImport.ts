@@ -2,16 +2,18 @@ import fs from 'node:fs/promises';
 import { CsvError, parse } from 'csv-parse/sync';
 import { InvalidInputError, InvalidSpreadsheetError, readSheet, SheetNotFoundError } from 'read-excel-file/node';
 import { z } from 'zod';
+import { readXlsWorkbook } from './xlsWorkbook.js';
 
 export class RosterImportError extends Error {}
 
 export async function readRoster(file: Express.Multer.File) {
   const contents = await fs.readFile(file.path);
+  const name = file.originalname.toLowerCase();
   let rows: unknown[][];
   try {
-    rows = file.originalname.toLowerCase().endsWith('.xlsx')
-      ? await readSheet(contents, { parseNumber: (value) => value })
-      : parse(contents, { bom: true, trim: true, skip_empty_lines: true });
+    if (name.endsWith('.xls')) rows = (await readXlsWorkbook(contents))[0].data;
+    else if (name.endsWith('.xlsx')) rows = await readSheet(contents, { parseNumber: (value) => value });
+    else rows = parse(contents, { bom: true, trim: true, skip_empty_lines: true });
   } catch (e) {
     if (e instanceof CsvError || e instanceof InvalidInputError || e instanceof InvalidSpreadsheetError || e instanceof SheetNotFoundError) {
       throw new RosterImportError(`名单文件解析失败，请检查文件格式：${e.message}`);

@@ -10,6 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Document, Packer, Paragraph } from 'docx';
+import XLSX from 'xlsx';
 
 test('outline writers, scoped supervision and manual mappings use the course source only', { timeout: 60000 }, async (t) => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,7 +161,7 @@ test('outline writers, scoped supervision and manual mappings use the course sou
   assert.equal((await alice('/api/supervision-management')).status, 403);
   assert.equal((await client()('/api/supervision-management')).status, 401);
   assert.equal((await alice('/api/supervision/progress')).status, 403);
-  const csv = [
+  const sourceRows = [
     ['课程名称', '课程组', '审核专业', '大纲执笔人', '教师名称'],
     ['计算机基础', groupA, cs, '执笔人甲', '任课教师甲'],
     ['计算机基础', groupA, cs, '执笔人甲', '平行班教师乙'],
@@ -169,13 +170,19 @@ test('outline writers, scoped supervision and manual mappings use the course sou
     ['机器学习', groupB, ai, '', '任课教师乙'],
     ['物联网基础', groupA, iot, '未建号执笔人', '任课教师丙'],
     ['计算机基础', groupA, ai, '执笔人乙', '任课教师乙'],
-  ].map((row) => row.join(',')).join('\n');
+  ];
+  const csv = sourceRows.map((row) => row.join(',')).join('\n');
   const importSource = (request = admin, text = csv) => {
     const form = new FormData();
     form.append('file', new Blob([text]), 'outline-source.csv');
     return request('/api/supervision-management/import', form);
   };
-  const imported = await importSource(tang);
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['课程清单说明']]), '说明');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(sourceRows), '课程清单');
+  const form = new FormData();
+  form.set('file', new Blob([XLSX.write(book, { bookType: 'biff8', type: 'buffer' })]), '课程清单.xls');
+  const imported = await tang('/api/supervision-management/import', form);
   assert.equal(imported.status, 200);
   assert.equal(imported.data.required, 6);
   assert.equal(imported.data.unassigned, 1);

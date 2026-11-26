@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import { Document, Packer, Paragraph } from 'docx';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
+import XLSX from 'xlsx';
 
 test('account activation, daily check quota and checklist download', { timeout: 45000 }, async (t) => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -112,6 +113,21 @@ test('account activation, daily check quota and checklist download', { timeout: 
   const roster = new FormData();
   roster.append('file', new Blob(['姓名,工号\n测试教师,teacher001\n同名教师,teacher002\n同名教师,teacher003\n旧版教师,teacher004\n重置教师,teacher005']), 'teachers.csv');
   assert.equal((await admin('/api/admin/users/import', roster)).data.imported, 5);
+  await t.test('legacy Excel roster uses the first sheet and preserves text employee IDs', async () => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['姓名', '工号'], ['表格教师', '000456']]), '名单');
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['姓名', '工号'], ['其他教师', '000457']]), '备注');
+    const form = new FormData();
+    form.set('file', new Blob([XLSX.write(book, { bookType: 'biff8', type: 'buffer' })]), 'teachers.XLS');
+    const imported = await admin('/api/admin/users/import', form);
+    assert.equal(imported.status, 200, JSON.stringify(imported.data));
+    assert.equal(imported.data.imported, 1);
+    assert.equal(database.prepare('SELECT name FROM users WHERE username = ?').get('000456').name, '表格教师');
+    form.set('file', new Blob(['不是 Excel 文件']), 'invalid.xls');
+    const invalid = await admin('/api/admin/users/import', form);
+    assert.equal(invalid.status, 400);
+    assert.match(invalid.data.error, /不是有效的 \.xls 文件/);
+  });
   const teacherId = database.prepare("SELECT id FROM users WHERE username = 'teacher001'").get().id;
   database.prepare("UPDATE users SET last_login_at = datetime('now','localtime','-1 day') WHERE id = ?").run(teacherId);
 

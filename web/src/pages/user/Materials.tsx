@@ -296,7 +296,7 @@ function CaseDetail({ id }: { id: string }) {
         {entry.editable && <Space wrap style={{ margin: '14px 0' }}>
           <Select aria-label="材料类型" placeholder="选择材料类型" disabled={readonly} showSearch value={type} onChange={setType}
             style={{ minWidth: 260 }} options={options([...entry.expected, ...entry.optional])} />
-          <input key={picker} aria-label="选择原始材料" type="file" accept=".docx,.xlsx,.pptx,.pdf,.jpg,.jpeg,.png" multiple disabled={readonly}
+          <input key={picker} aria-label="选择原始材料" type="file" accept=".docx,.xls,.xlsx,.pptx,.pdf,.jpg,.jpeg,.png" multiple disabled={readonly}
             onChange={(e) => setUpload([...e.currentTarget.files ?? []])} />
           <Button aria-label="上传材料" disabled={readonly || !type || !upload.length} loading={pending} onClick={() => perform(async () => {
             let sent = 0;

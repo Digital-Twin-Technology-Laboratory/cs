@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { Document, Packer, Paragraph, Table, TableCell, TableRow } from 'docx';
 import JSZip from 'jszip';
+import XLSX from 'xlsx';
 
 const scope = { level: 'course', title: '程序设计', term: '2026-2027 第1学期', section: '1班',
   major: '计算机科学与技术', teaching: 'theory', assessments: ['other'], flags: [], rounding: 'integer' };
@@ -26,6 +27,12 @@ function xlsx(rows) {
   zip.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="反馈明细" sheetId="1" r:id="rId1"/></sheets></workbook>');
   zip.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
   return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+function xls(rows) {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), '反馈明细');
+  return XLSX.write(book, { bookType: 'biff8', type: 'buffer' });
 }
 
 test('course and college material checks preserve scope, quantified differences, reports and quota', { timeout: 45000 }, async (t) => {
@@ -116,10 +123,11 @@ test('course and college material checks preserve scope, quantified differences,
     }
     assert.fail(output);
   }
-  const grade = await word(['成绩比例：平时：40%，期末：60%'], [
-    ['序号', '学号', '姓名', '平时成绩', '期末成绩', '总评成绩', '备注'],
-    ['1', '202600101', '隐私样例', '80', '90', '86', ''],
-    ['2', '202600102', '隐私样例二', '0', '60', '36', ''],
+  const grade = xls([
+    ['成绩比例：平时：40%，期末：60%'],
+    ['序号', '学号', '姓名', null, '平时成绩', '期末成绩', '总评成绩', '备注'],
+    [1, '202600101', '隐私样例', null, 80, 90, 86, ''],
+    [2, '202600102', '隐私样例二', null, 0, 60, 36, ''],
   ]);
   const newCase = await teacher(base, { ...scope, assessments: [] });
   assert.equal(newCase.status, 201);
@@ -128,7 +136,7 @@ test('course and college material checks preserve scope, quantified differences,
   assert.equal(draft.scopeLocked, false);
   assert.ok(!draft.expected.includes('命题双向细目表'));
   assert.ok(draft.optional.includes('命题双向细目表'));
-  const gradeId = await add(teacher, course, '课程成绩单', grade, '正式成绩.docx');
+  const gradeId = await add(teacher, course, '课程成绩单', grade, '正式成绩.xls');
   const first = await check(teacher, course);
   assert.equal(first.result.rules.length, 104);
   assert.deepEqual(first.result.history, []);
@@ -148,7 +156,7 @@ test('course and college material checks preserve scope, quantified differences,
   const discrepancy = second.result.rules.find((r) => r.code === 'C023');
   assert.equal(second.result.verdict, 'failed');
   assert.equal(discrepancy.status, '需整改');
-  assert.ok(discrepancy.findings.some((f) => /30% 与 40%/.test(f.detail) && /大纲\.docx.*正式成绩\.docx/.test(f.location)));
+  assert.ok(discrepancy.findings.some((f) => /30% 与 40%/.test(f.detail) && /大纲\.docx.*正式成绩\.xls/.test(f.location)));
   const firstAgain = await teacher(`${course}/runs/${first.id}`);
   assert.deepEqual(firstAgain.data.result, first.result);
   const oldReport = await teacher(`${course}/runs/${first.id}/report.docx`);
@@ -165,7 +173,7 @@ test('course and college material checks preserve scope, quantified differences,
     weights: { 平时: 30, 期末: 70 }, weightsVerified: true,
   }, 'PUT');
   assert.equal(change.status, 200);
-  assert.deepEqual((await teacher(`${course}/files/${gradeId}/original`)).data, grade);
+  assert.ok((await teacher(`${course}/files/${gradeId}/original`)).data.equals(grade));
   const corrected = await check(teacher, course);
   assert.deepEqual(corrected.result.stats[0].weights, { 平时: 30, 期末: 70 });
   assert.equal(corrected.result.rules.find((r) => r.code === 'C032').status, '需核实');
@@ -174,7 +182,7 @@ test('course and college material checks preserve scope, quantified differences,
 
   const mixedRow = await teacher(base, { ...scope, section: '2班', teaching: 'mixed', flags: ['separateLab'] });
   const mixed = `${base}/${mixedRow.data.id}`;
-  await add(teacher, mixed, '课程成绩单', grade);
+  await add(teacher, mixed, '课程成绩单', grade, '正式成绩.xls');
   const partial = await check(teacher, mixed);
   assert.equal(partial.result.verdict, 'partial');
   assert.equal(partial.result.rules.find((r) => r.code === 'C043').status, '待补');
@@ -215,17 +223,18 @@ test('course and college material checks preserve scope, quantified differences,
     const endpoint = `${base}/${created.data.id}`;
     const history = `${base}/history`;
     const feedback = '教学大纲只写了权重范围。\n应明确平时与期末比例。';
-    const workbook = await xlsx([
+    const feedbackRows = [
       ['课程', '课程代码', '任课教师', '教师工号', '学期', '具体反馈', '原表位置'],
       ['旧名称', 'COURSE-01', 'Materials Teacher', 'materials-teacher', '2025-2026-1', feedback, '大纲!C2'],
       ['旧名称', 'COURSE-01', '共同教师', '000123', '2025-2026-1', feedback, '大纲!C3'],
       ['复查测试课', '', 'Materials Teacher', '', '2025-2026-1', '学生答卷改分未签字。', '试卷!C4'],
       ['往期独立课程', '', '共同教师', '', '2025-2026-2', '教学进度表少排4课时。', '进度!C5'],
       ['另一门未匹配课程', '', '', '', '', '请核实教学大纲。', '大纲!C6'],
-    ]);
+    ];
+    const workbook = xls(feedbackRows);
     const workbookForm = (choices) => {
       const form = new FormData();
-      form.set('file', new Blob([workbook]), '反馈.xlsx');
+      form.set('file', new Blob([workbook]), '反馈.xls');
       if (choices) form.set('choices', JSON.stringify(choices));
       return form;
     };
@@ -233,6 +242,11 @@ test('course and college material checks preserve scope, quantified differences,
     const preview = await admin(`${history}/preview`, workbookForm());
     assert.equal(preview.status, 200, JSON.stringify(preview.data));
     const rows = preview.data.rows;
+    const modern = new FormData();
+    modern.set('file', new Blob([await xlsx(feedbackRows)]), '反馈.xlsx');
+    const modernPreview = await admin(`${history}/preview`, modern);
+    assert.equal(modernPreview.status, 200, JSON.stringify(modernPreview.data));
+    assert.deepEqual(modernPreview.data.rows.map(({ source, ...row }) => row), rows.map(({ source, ...row }) => row));
     assert.deepEqual(rows.map((row) => row.status), ['matched', 'matched', 'ambiguous', 'unmatched', 'unmatched']);
     assert.equal(rows[0].candidates[0].name, draft.title);
     const codeKey = rows[0].candidates[0].key;
@@ -252,15 +266,15 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal((await query(teacher, '复查测试课', 'Materials Teacher')).data.total, 2);
     assert.equal((await query(teacher, '往期独立课程', '')).data.total, 0);
 
-    const fileId = await add(admin, endpoint, '课程教学大纲', await xlsx([
-      ['考核项目', '权重'], ['总评', '平时40%，期末60%'],
-    ]), '本次大纲.xlsx');
+    const fileId = await add(admin, endpoint, '课程教学大纲', xls([
+      [], ['考核项目', '权重'], ['总评', '平时40%，期末60%'],
+    ]), '本次大纲.xls');
     assert.equal((await admin(`${endpoint}/runs`, {})).status, 400);
     const reviewed = await check(admin, endpoint, { term: '2026-2027 第1学期' });
     assert.equal(reviewed.result.rules.length, 104);
     const found = reviewed.result.history.find((row) => row.issue.text === feedback);
     assert.equal(found.status, '未发现问题');
-    assert.deepEqual(found.locations, [{ fileId, file: '本次大纲.xlsx', position: '工作表 反馈明细 · 第 2 行' }]);
+    assert.deepEqual(found.locations, [{ fileId, file: '本次大纲.xls', position: '工作表 反馈明细 · 第 3 行' }]);
     const missing = reviewed.result.history.find((row) => row.issue.text.includes('学生答卷'));
     assert.equal(missing.status, '待补');
     assert.deepEqual(missing.missing, ['学生答卷']);
@@ -268,7 +282,7 @@ test('course and college material checks preserve scope, quantified differences,
     const reportText = await (await JSZip.loadAsync(report.data)).file('word/document.xml').async('string');
     assert.match(reportText, /历史问题复查/);
     assert.match(reportText, /学生答卷改分未签字/);
-    assert.match(reportText, /本次大纲\.xlsx · 工作表 反馈明细 · 第 2 行/);
+    assert.match(reportText, /本次大纲\.xls · 工作表 反馈明细 · 第 3 行/);
     const skipped = await check(admin, endpoint, { reviewHistory: false });
     assert.deepEqual(skipped.result.rules, reviewed.result.rules);
     assert.equal(skipped.result.history, undefined);

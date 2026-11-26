@@ -5,6 +5,7 @@ import { requireAuth, toPublic, type UserRow } from '../auth.js';
 import { cleanupTmp, singleUpload } from '../services/upload.js';
 import { RosterImportError } from '../services/rosterImport.js';
 import { readOutlineFile, readTencentOutline } from '../services/outlineImport.js';
+import { EXCEL_EXTENSIONS } from '../services/xlsWorkbook.js';
 import { GROUP_PRESETS } from '../services/supervisionRoles.js';
 import { availableViews, getOutlineRows, PROFESSIONALS, scopeOutlineRows, summarizeOutlines } from '../services/outlineProgress.js';
 
@@ -123,9 +124,9 @@ function importRows(parsed: Awaited<ReturnType<typeof readOutlineFile>>, url: st
   return { required: parsed.rows.length, unassigned: summarizeOutlines(getOutlineRows()).unassigned, warnings };
 }
 
-supervisionManagementRouter.post('/import', singleUpload(['.xlsx', '.csv']), async (req, res) => {
+supervisionManagementRouter.post('/import', singleUpload([...EXCEL_EXTENSIONS, '.csv']), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: '请选择云文档导出的 .xlsx 或 .csv 清单' });
+    if (!req.file) return res.status(400).json({ error: '请选择云文档导出的 .xls、.xlsx 或 .csv 清单' });
     res.json(importRows(await readOutlineFile(req.file), '', req.user, req.ip));
   } catch (e) {
     if (e instanceof RosterImportError) return res.status(400).json({ error: e.message });
