@@ -12,7 +12,7 @@ import { availableMaterials, optionalMaterials, flags, materialScopeSchema, mate
 import { MATERIAL_EXTENSIONS } from '../services/materialExtract.js';
 import { EXCEL_EXTENSIONS } from '../services/xlsWorkbook.js';
 import { extractGradeRows, GRADE_TYPES, materialWeights } from '../services/materialGrades.js';
-import { materialIssueGroups } from '../services/materialIssues.js';
+import { materialIssueReport } from '../services/materialIssues.js';
 import { canAccessMaterial, filePages, fullAccess, type MaterialCaseRow, type MaterialFileRow, type MaterialRunRow, type RunSnapshot } from '../services/materialRuns.js';
 import type { MaterialResult } from '../services/materialReview.js';
 import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
@@ -369,7 +369,7 @@ materialsRouter.get('/:caseId/runs/:runId', (req, res) => {
   const result = run.result_json ? resultForUser(run, req.user!) : null;
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ id: run.id, version: run.version, status: run.status, error: run.error,
-    result: result && { ...result, issueGroups: materialIssueGroups(result) } });
+    result: result && { ...result, issueReport: materialIssueReport(result) } });
 });
 
 function resultForUser(run: MaterialRunRow, user: PublicUser) {
@@ -386,32 +386,37 @@ materialsRouter.get('/:caseId/runs/:runId/report.docx', async (req, res) => {
   if (!run.result_json) return res.status(409).json({ error: '检查尚未生成报告' });
   const r = resultForUser(run, req.user!);
   const { scope } = JSON.parse(run.snapshot_json) as RunSnapshot;
-  const groups = materialIssueGroups(r);
+  const report = materialIssueReport(r);
+  const issueParagraphs = (issues: typeof report.toVerify, material?: string) => issues.flatMap((issue, i) => {
+    const context = [
+      issue.materials.length && (issue.materials.length !== 1 || issue.materials[0] !== material) && `涉及材料：${issue.materials.join(' / ')}`,
+      ...issue.locations.map((location) => `位置：${location}`),
+    ].filter((line): line is string => !!line);
+    return [new Paragraph({ children: [new TextRun({ text: `${i + 1}. ${issue.title}`, bold: true })],
+      spacing: { before: 120 }, keepNext: !!context.length || issue.title !== issue.detail || !!issue.action || !!issue.history }),
+    ...context.map((line) => new Paragraph({ children: [new TextRun({ text: line, color: '475569', size: 20 })] })),
+    ...(issue.title !== issue.detail ? [new Paragraph(`问题：${issue.detail}`)] : []),
+    ...(issue.action ? [new Paragraph(`整改意见：${issue.action}`)] : []),
+    ...(issue.history ? [new Paragraph(`往期反馈：${issue.history}`)] : [])];
+  });
   const doc = new Document({ styles: { default: { title: { run: { color: '000000' } }, heading1: { run: { color: '000000' } },
     heading2: { run: { color: '000000' } } } }, sections: [{ children: [
     new Paragraph({ text: '教学材料问题汇总', heading: HeadingLevel.TITLE }),
     new Paragraph([scope.title, scope.term, scope.section, scope.major, scope.group].filter(Boolean).join(' · ')),
     new Paragraph(`常规检查：${results[r.verdict]} · 检查 #${run.id} · ${run.finished_at}`),
-    new Paragraph(groups.length ? groups.map(({ label, count }) => `${label} ${count} 项`).join('　') : '本次没有需要处理的事项。'),
-    ...groups.flatMap(({ label, materials }) => [
-      new Paragraph({ text: label, heading: HeadingLevel.HEADING_1 }),
-      ...materials.flatMap(({ material, issues }) => [
-        ...(material ? [new Paragraph({ text: material, heading: HeadingLevel.HEADING_2 })] : []),
-        ...issues.flatMap((issue, i) => {
-          const notes = [
-            issue.history && `往期反馈：${issue.history}`,
-            issue.materials.length && (issue.materials.length !== 1 || issue.materials[0] !== material) && `涉及材料：${issue.materials.join(' / ')}`,
-            ...issue.locations.map((location) => `位置：${location}`),
-            issue.checks.length && `检查项：${issue.checks.map(({ code, title }) => title === issue.title ? code : `${code} ${title}`).join('；')}`,
-          ].filter((note): note is string => !!note);
-          return [new Paragraph({ children: [new TextRun({ text: `${i + 1}. ${issue.title}`, bold: true })],
-            spacing: { before: 120 }, keepNext: issue.title !== issue.detail || !!issue.action || !!notes.length }),
-          ...(issue.title !== issue.detail ? [new Paragraph(issue.detail)] : []),
-          ...(issue.action ? [new Paragraph(`怎么改：${issue.action}`)] : []),
-          ...notes.map((note) => new Paragraph({ children: [new TextRun({ text: note, color: '475569', size: 20 })] }))];
-        }),
+    ...(!report.materials.length ? [new Paragraph('本次未发现明确问题或建议修改项。')] : []),
+    ...report.materials.flatMap(({ material, source, sections }) => [
+      new Paragraph({ text: material, heading: HeadingLevel.HEADING_1 }),
+      ...(source ? [new Paragraph({ text: source, keepNext: true })] : []),
+      ...sections.flatMap(({ label, issues }) => [
+        new Paragraph({ text: label, heading: HeadingLevel.HEADING_2 }),
+        ...issueParagraphs(issues, material),
       ]),
     ]),
+    ...(report.missing.length ? [new Paragraph({ text: '附 待补材料', heading: HeadingLevel.HEADING_1 }),
+      new Paragraph(report.missing.join('；'))] : []),
+    ...(report.toVerify.length ? [new Paragraph({ text: '附 需核实事项', heading: HeadingLevel.HEADING_1 }),
+      new Paragraph('以下事项尚未确认，不属于已确认问题。'), ...issueParagraphs(report.toVerify)] : []),
   ] }] });
   const buffer = await Packer.toBuffer(doc);
   res.setHeader('Cache-Control', 'private, no-store');

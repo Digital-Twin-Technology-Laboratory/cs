@@ -1,8 +1,5 @@
 import type { Finding, MaterialResult } from './materialReview.js';
 
-const sections = [
-  ['需整改', '明确问题（优先整改）'], ['待补', '待补材料'], ['需核实', '需核实'], ['建议完善', '建议完善'],
-] as const;
 type Issue = {
   title: string;
   detail: string;
@@ -23,9 +20,9 @@ function compactLocations(location: string): string[] {
   return sources.size ? [...sources].map(([source, lines]) => `${source} · 提取文本第 ${[...lines].sort((a, b) => Number(a) - Number(b)).join('、')} 行`) : [location];
 }
 
-export function materialIssueGroups(result: MaterialResult) {
+export function materialIssueReport(result: MaterialResult) {
   const uploaded = new Set(result.files.map((file) => file.type));
-  return sections.flatMap(([status, label]) => {
+  const [confirmed, suggestions, missing, toVerify] = (['需整改', '建议完善', '待补', '需核实'] as const).map((status) => {
     const issues = new Map<string, Issue>();
     function record(detail: string, locations: string[], rule?: MaterialResult['rules'][number],
       { headline, action, history }: Pick<Finding, 'headline' | 'action'> & { history?: string } = {}) {
@@ -60,16 +57,29 @@ export function materialIssueGroups(result: MaterialResult) {
       else record(row.detail.trim(), [...new Set(row.locations.map((loc) =>
         `${loc.file}${loc.fileId ? `（附件 #${loc.fileId}）` : ''} · ${loc.position}`))], undefined, { history: row.issue.text.trim() });
     }
-    if (!issues.size) return [];
-    const byMaterial = new Map<string, Issue[]>();
-    for (const issue of issues.values()) {
-      const material = status !== '需整改' ? '' : issue.materials.length === 1 ? issue.materials[0]
-        : issue.materials.length > 1 ? '跨材料核对' : '待定位材料';
-      const bucket = byMaterial.get(material) ?? [];
-      bucket.push(issue);
+    return [...issues.values()];
+  });
+  const byMaterial = new Map<string, { confirmed: Issue[]; suggestions: Issue[] }>();
+  for (const [category, issues] of [['confirmed', confirmed], ['suggestions', suggestions]] as const) {
+    for (const issue of issues) {
+      const material = issue.materials.length === 1 ? issue.materials[0] : issue.materials.length > 1 ? '跨材料核对' : '待定位材料';
+      const bucket = byMaterial.get(material) ?? { confirmed: [], suggestions: [] };
+      bucket[category].push(issue);
       byMaterial.set(material, bucket);
     }
-    const materials = [...byMaterial].map(([material, issues]) => ({ material, issues }));
-    return [{ status, label, count: issues.size, materials }];
+  }
+  const materials = [...byMaterial].map(([material, bucket]) => {
+    const files = result.files.filter((file) => file.type === material);
+    const file = files.length === 1 ? files[0] : undefined;
+    const source = file && (file.id ? `${file.name}（附件 #${file.id}）` : file.name);
+    const sections = ([['重大及明确问题', bucket.confirmed], ['建议修改', bucket.suggestions]] as const)
+      .filter(([, issues]) => issues.length).map(([label, issues]) => ({ label, issues: issues.map((issue) => {
+        if (!file || !source) return issue;
+        const locations = issue.locations.filter((location) => location !== source && location !== file.name)
+          .map((location) => location.startsWith(`${source} · `) ? location.slice(source.length + 3) : location);
+        return { ...issue, locations };
+      }) }));
+    return { material, source, sections };
   });
+  return { materials, missing: missing.map((issue) => issue.title), toVerify };
 }

@@ -11,7 +11,7 @@ import { Document, Packer, Paragraph, Table, TableCell, TableRow } from 'docx';
 import JSZip from 'jszip';
 import XLSX from 'xlsx';
 import { callAnthropic } from '../server/src/services/ai/anthropic.ts';
-import { materialIssueGroups } from '../server/src/services/materialIssues.ts';
+import { materialIssueReport } from '../server/src/services/materialIssues.ts';
 
 const scope = { level: 'course', title: '程序设计', term: '2026-2027 第1学期', section: '1班',
   major: '计算机科学与技术', teaching: 'theory', assessments: ['other'], flags: [], rounding: 'integer' };
@@ -37,7 +37,7 @@ function xls(rows) {
   return XLSX.write(book, { bookType: 'biff8', type: 'buffer' });
 }
 
-test('issue summary merges repeated findings and missing material without dropping distinct locations', () => {
+test('material report puts confirmed issues before suggestions within each material', () => {
   const at = (line, quote) => `大纲.docx（附件 #1） · 文档正文 · 提取文本第 ${line} 行：「${quote}」`;
   const shared = { status: '需整改', location: `${at(8, '长摘录\n第二行')}\n${at(12, '另一段摘录')}`, detail: '学时小计不一致，请重新合计。' };
   const cross = { status: '需整改', headline: '进度表比大纲少排 4 学时', detail: '大纲 68 学时，进度表实排 64 学时。',
@@ -46,7 +46,7 @@ test('issue summary merges repeated findings and missing material without droppi
   const verify = { status: '需核实', location: '', detail: '请人工核实。' };
   const rule = (code, findings, materials = ['课程教学大纲']) => ({ code, title: code, materials, status: findings[0].status, findings });
   const types = ['课程教学大纲', '教学进度表（教学日历）'];
-  const groups = materialIssueGroups({ files: [{ id: 1, name: '大纲.docx', type: types[0] }, { id: 2, name: '进度.xlsx', type: types[1] }], rules: [
+  const result = { files: [{ id: 1, name: '大纲.docx', type: types[0] }, { id: 2, name: '进度.xlsx', type: types[1] }], rules: [
     rule('C001', [shared, { ...shared, location: at(21, '另一处') }]),
     rule('C002', [{ ...shared, location: `${at(12, '另一段摘录')}\n${at(8, '同一行的另一段')}` }], types),
     rule('C016', [cross], types),
@@ -57,18 +57,25 @@ test('issue summary merges repeated findings and missing material without droppi
   ], history: [
     { status: '待补', missing: ['实验报告、实践报告'] },
     { status: '需核实', issue: { text: '未注明课程负责人。' }, detail: '请核实签字栏。', locations: [{ file: '大纲.docx', position: '封面' }] },
-  ] });
-  assert.deepEqual(groups.map(({ status, count }) => [status, count]), [['需整改', 3], ['待补', 1], ['需核实', 2], ['建议完善', 1]]);
-  assert.deepEqual(groups[0].materials.map(({ material, issues }) => [material, issues.length]), [['课程教学大纲', 2], ['跨材料核对', 1]]);
-  const original = groups[0].materials[0].issues[0];
+  ] };
+  const report = materialIssueReport(result);
+  assert.deepEqual(report.materials.map(({ material, sections }) => [material, sections.map(({ label, issues }) => [label, issues.length])]), [
+    ['课程教学大纲', [['重大及明确问题', 2], ['建议修改', 1]]], ['跨材料核对', [['重大及明确问题', 1]]],
+  ]);
+  const [outline, comparison] = report.materials;
+  assert.equal(outline.source, '大纲.docx（附件 #1）');
+  const original = outline.sections[0].issues[0];
   assert.deepEqual(original.checks.map(({ code }) => code), ['C001', 'C002']);
-  assert.deepEqual(original.locations, ['大纲.docx（附件 #1） · 文档正文 · 提取文本第 8、12 行']);
-  const joint = groups[0].materials[1].issues[0];
+  assert.deepEqual(original.locations, ['文档正文 · 提取文本第 8、12 行']);
+  const multi = materialIssueReport({ ...result, files: [...result.files, { id: 3, name: '另一份大纲.docx', type: types[0] }] });
+  assert.equal(multi.materials[0].source, undefined);
+  assert.deepEqual(multi.materials[0].sections[0].issues[0].locations, ['大纲.docx（附件 #1） · 文档正文 · 提取文本第 8、12 行']);
+  const joint = comparison.sections[0].issues[0];
   assert.deepEqual(joint.materials, types);
   assert.equal(joint.title, cross.headline);
   assert.equal(joint.action, cross.action);
-  assert.equal(groups[1].materials[0].issues[0].title, '实验报告、实践报告');
-  const review = groups[2].materials[0].issues;
+  assert.deepEqual(report.missing, ['实验报告、实践报告']);
+  const review = report.toVerify;
   assert.deepEqual(review[0].checks.map(({ code }) => code), ['C004']);
   assert.equal(review[1].history, '未注明课程负责人。');
   assert.deepEqual(review[1].locations, ['大纲.docx · 封面']);
@@ -266,12 +273,11 @@ test('course and college material checks preserve scope, quantified differences,
   const docx = await teacher(`${course}/runs/${second.id}/report.docx`);
   const xml = await (await JSZip.loadAsync(docx.data)).file('word/document.xml').async('string');
   assert.match(xml, /教学材料问题汇总/);
-  assert.match(xml, /明确问题（优先整改）.*跨材料核对.*30% 与 40%.*待补材料/s);
+  assert.match(xml, /跨材料核对.*重大及明确问题.*30% 与 40%.*附 待补材料.*附 需核实事项/s);
   assert.equal((xml.match(/30% 与 40%/g) ?? []).length, 1);
   assert.doesNotMatch(xml, /按材料查|按问题查|成绩统计|不适用|已核对所引原文|：「/);
-  assert.ok(second.result.issueGroups.some((group) => group.status === '需整改' &&
-    group.materials.some(({ material, issues }) => material === '跨材料核对' &&
-      issues.some((issue) => /30% 与 40%/.test(issue.detail) && issue.locations.some((loc) => loc.includes('大纲.docx'))))));
+  assert.ok(second.result.issueReport.materials.some(({ material, sections }) => material === '跨材料核对' && sections.some(({ issues }) =>
+    issues.some((issue) => /30% 与 40%/.test(issue.detail) && issue.locations.some((loc) => loc.includes('大纲.docx'))))));
   assert.doesNotMatch(xml, /202600101|隐私样例/);
   const change = await teacher(`${course}/files/${gradeId}/grades`, {
     edits: gradeTable.rows.map((row, i) => ({ location: row.location, line: row.line, column: '总评', value: ['87', '42'][i] })),
@@ -300,7 +306,7 @@ test('course and college material checks preserve scope, quantified differences,
   await add(admin, college, '学院汇报及支撑目录', await word(['汇报写覆盖全部课程，附件目录仅提供一个教学班的档案。']));
   const review = await check(admin, college);
   assert.equal(review.result.rules.find((r) => r.code === 'C095').status, '需整改');
-  assert.ok(review.result.issueGroups[0].materials.flatMap(({ issues }) => issues).some((issue) =>
+  assert.ok(review.result.issueReport.materials.flatMap(({ sections }) => sections.flatMap(({ issues }) => issues)).some((issue) =>
     issue.title === '汇报与支撑材料覆盖范围不一致' && issue.action === '更正汇报的覆盖范围，或补齐其他课程的档案。'));
   assert.equal(review.result.rules.find((r) => r.code === 'C025').status, '不适用');
   assert.equal((await teacher(college)).status, 404);
