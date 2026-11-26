@@ -17,7 +17,7 @@ const exec = promisify(execFile);
 const win = process.platform === 'win32';
 const projectPython = path.join(ROOT_DIR, '.venv-material-ocr', win ? 'Scripts/python.exe' : 'bin/python');
 export type TextBox = { x: number; y: number; text: string; confidence: number };
-export type MaterialPage = { location: string; text: string; rows?: string[][]; boxes?: TextBox[]; ocr?: true; warning?: string };
+export type MaterialPage = { location: string; text: string; rows?: string[][]; boxes?: TextBox[]; ocr?: true; vision?: true; warning?: string };
 
 async function recognize(file: string, ext: string, pages: number[]): Promise<Map<number, MaterialPage>> {
   const python = process.env.MATERIAL_OCR_PYTHON || (existsSync(projectPython) ? projectPython : win ? 'python' : 'python3');

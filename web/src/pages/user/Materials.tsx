@@ -292,7 +292,8 @@ function CaseDetail({ id }: { id: string }) {
             </AutoComplete>
           </Form.Item>
         </Form>}
-        <Alert type="info" showIcon message="可以先检查已上传的材料。应交未上传记为待补，不适用不记缺失。" />
+        <Alert type="info" showIcon message="可以先检查已上传的材料。应交未上传记为待补，不适用不记缺失。"
+          description="开始检查时，普通 JPG、PNG 会自动发送给当前 AI 接口识别文字。请先脱敏；成绩单和学生答卷仅在本地处理。" />
         {entry.editable && <Space wrap style={{ margin: '14px 0' }}>
           <Select aria-label="材料类型" placeholder="选择材料类型" disabled={readonly} showSearch value={type} onChange={setType}
             style={{ minWidth: 260 }} options={options([...entry.expected, ...entry.optional])} />

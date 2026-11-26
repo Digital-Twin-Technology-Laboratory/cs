@@ -14,19 +14,25 @@ export async function callAnthropic(o: AiCallOptions & { structured: boolean }):
     maxRetries: 2,
   });
 
+  const content: Anthropic.Messages.MessageParam['content'] = o.image ? [
+    { type: 'text', text: o.user },
+    { type: 'image', source: { type: 'base64', media_type: o.image.mediaType, data: o.image.data } },
+  ] : o.user;
   const params = {
     model: o.model,
     max_tokens: o.maxTokens,
-    thinking: { type: 'adaptive' as const },
     system: o.system,
-    messages: [{ role: 'user' as const, content: o.user }],
-    output_config: {
-      effort: o.effort,
-      ...(o.structured ? { format: { type: 'json_schema' as const, schema: RESULT_JSON_SCHEMA } } : {}),
-    },
+    messages: [{ role: 'user' as const, content }],
+    ...(!o.image ? {
+      thinking: { type: 'adaptive' as const },
+      output_config: {
+        effort: o.effort,
+        ...(o.structured ? { format: { type: 'json_schema' as const, schema: RESULT_JSON_SCHEMA } } : {}),
+      },
+    } : {}),
   };
 
-  const message = o.anthropicFallback
+  const message = o.anthropicFallback && !o.image
     ? await client.beta.messages
         .stream({
           ...params,

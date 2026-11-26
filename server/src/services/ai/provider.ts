@@ -7,6 +7,8 @@ import { callAnthropic, describeAnthropicError } from './anthropic.js';
 import { DEFAULT_SYSTEM_PROMPT } from './prompt.js';
 import { SYLLABUS_SCOPE_RULES } from '../../seed/checklist.js';
 
+type AiImage = { mediaType: 'image/jpeg' | 'image/png'; data: string };
+
 export interface AiCallOptions {
   apiKey: string;
   baseUrl: string;
@@ -19,6 +21,7 @@ export interface AiCallOptions {
   jsonMode: boolean;
   system: string;
   user: string;
+  image?: AiImage;
 }
 
 export interface AiCallResult {
@@ -29,6 +32,7 @@ export interface AiCallResult {
 }
 
 export class AiConfigError extends Error {}
+export class AiImageRequestError extends Error {}
 
 export function aiReady(s: AiSettings = getSettings('ai')): string | null {
   if (!s.model) return '尚未配置 AI 模型';
@@ -62,7 +66,7 @@ export async function listModels(settings: Pick<AiSettings, 'provider' | 'baseUr
 
 export async function callAi(
   user: string,
-  opts: { system?: string; maxTokens?: number; structured?: boolean; settings?: AiSettings; apiKey?: string } = {},
+  opts: { system?: string; maxTokens?: number; structured?: boolean; settings?: AiSettings; apiKey?: string; image?: AiImage } = {},
 ): Promise<AiCallResult> {
   const s = opts.settings ?? getSettings('ai');
   const apiKey = opts.apiKey ?? decrypt(s.apiKeyEnc);
@@ -82,6 +86,7 @@ export async function callAi(
     jsonMode: s.jsonMode,
     system: opts.system ?? effectiveSystemPrompt(s),
     user,
+    image: opts.image,
   };
   try {
     return s.provider === 'anthropic'
@@ -89,6 +94,12 @@ export async function callAi(
       : await callOpenAICompatible(o);
   } catch (e) {
     const msg = describeAnthropicError(e) ?? describeOpenAIError(e);
+    if (msg && o.image) {
+      // Providers may echo submitted image data in error bodies.
+      throw new AiImageRequestError(e instanceof OpenAI.BadRequestError || e instanceof Anthropic.BadRequestError
+        ? 'AI 接口拒绝了图片请求，请确认模型和接口支持图片输入，且图片格式正确'
+        : 'AI 图片识别请求失败，请检查 AI 接口配置或稍后重试');
+    }
     if (msg) throw new Error(msg);
     throw e;
   }

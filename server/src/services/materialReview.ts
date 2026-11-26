@@ -39,8 +39,14 @@ export const safeForAi = new Set([
   '人才培养方案及支撑矩阵', '实验实训条件及项目开出记录', '学院汇报及支撑目录', '教学管理制度及适用通知',
   '课程考核质量分析表', '教研室互查表及教研活动记录', '学院检查、整改及复核台账',
 ]);
-const personal = /学\s*[号籍]|考生\s*(?:姓名|号)|学生\s*姓名|逐人\s*成绩|\b\d{7,}\b|[\u4e00-\u9fa5]{2,4}\s*[|｜,，]\s*\d{1,3}\s*[|｜,，]\s*\d{1,3}/;
-export const canSendPageToAi = (page: MaterialPage) => !page.ocr && !page.warning && !!page.text.trim() && !personal.test(page.text);
+const personal = /学\s*[号籍]|考生\s*(?:姓名|号)|学生\s*姓名|逐人\s*成绩|\b\d{7,}\b/;
+const possibleScoreRow = /[\u4e00-\u9fa5]{2,4}\s*[|｜,，]\s*\d{1,3}\s*[|｜,，]\s*\d{1,3}/;
+const teachingHoursTable = /^【表格】\n\| 教学内容 \| 理论(?:学时)? \| (?:实验(?:[\/／]实践)?|实践)(?:学时)? \| 小计 \|.*(?:\n\|.*)*/gm;
+// 只有疑似成绩行的判断跳过学时表；全篇仍核对明确的个人信息线索。
+export const containsStudentDetails = (text: string) =>
+  personal.test(text) || possibleScoreRow.test(text.replace(teachingHoursTable, '\n'));
+export const canSendPageToAi = (page: MaterialPage) =>
+  (!page.ocr || page.vision) && !page.warning && !!page.text.trim() && !containsStudentDetails(page.text);
 const aiOutput = z.object({ items: z.array(z.object({
   code: z.string(), status: z.enum(['未发现问题', '需整改', '建议完善', '需核实']),
   detail: z.string().min(1).max(800),

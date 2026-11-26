@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import { Document, Packer, Paragraph, Table, TableCell, TableRow } from 'docx';
 import JSZip from 'jszip';
 import XLSX from 'xlsx';
+import { callAnthropic } from '../server/src/services/ai/anthropic.ts';
 
 const scope = { level: 'course', title: '程序设计', term: '2026-2027 第1学期', section: '1班',
   major: '计算机科学与技术', teaching: 'theory', assessments: ['other'], flags: [], rounding: 'integer' };
@@ -38,10 +39,38 @@ function xls(rows) {
 test('course and college material checks preserve scope, quantified differences, reports and quota', { timeout: 45000 }, async (t) => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), 'cs-material-tests-'));
   const modelRequests = [];
+  const visionRequests = [];
+  const visionText = '平时40%，期末60%';
+  let rejectImage = false;
   const model = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString());
+    if (req.url === '/v1/messages') {
+      visionRequests.push(payload);
+      res.setHeader('Content-Type', 'text/event-stream');
+      const events = [
+        { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'mock', content: [],
+          stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: visionText } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 8 } },
+        { type: 'message_stop' },
+      ];
+      res.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
+      return;
+    }
+    if (Array.isArray(payload.messages.at(-1).content)) {
+      visionRequests.push(payload);
+      res.setHeader('Content-Type', 'application/json');
+      if (rejectImage) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: { message: payload.messages.at(-1).content[1].image_url.url } }));
+        return;
+      }
+      res.end(JSON.stringify({ choices: [{ message: { content: visionText }, finish_reason: 'stop' }], model: 'mock' }));
+      return;
+    }
     const input = JSON.parse(payload.messages[1].content);
     modelRequests.push(input);
     const items = input.issues ? input.issues.map((issue) => ({
@@ -63,7 +92,7 @@ test('course and college material checks preserve scope, quantified differences,
   const port = reservation.address().port;
   await new Promise((resolve) => reservation.close(resolve));
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'server/src/index.ts'], {
-    env: { ...process.env, DATA_DIR: dataDir, HOST: '127.0.0.1', PORT: String(port) },
+    env: { ...process.env, DATA_DIR: dataDir, HOST: '127.0.0.1', PORT: String(port), MATERIAL_OCR_PYTHON: path.join(dataDir, 'no-python') },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -151,8 +180,22 @@ test('course and college material checks preserve scope, quantified differences,
   assert.equal((await teacher(course, { ...scope, major: '人工智能' }, 'PUT')).status, 409);
   assert.equal((await teacher(course, { ...scope, title: '程序设计（已编辑）' }, 'PUT')).status, 200);
   assert.equal((await teacher(course)).data.scope.title, '程序设计（已编辑）');
-  await add(teacher, course, '课程教学大纲', await word(['课程教学大纲：程序设计', '总评成绩比例：平时：30%，期末：70%']), '大纲.docx');
+  const teachingHours = [
+    ['教学内容', '理论', '实验/实践', '小计', '教学方法', '支撑 / 课程目标'],
+    ['1.数据库系统的基本原理', '2', '2', '2（2）', '讲授法', '目标1'],
+    ['合计', '2', '2', '2（2）', '', ''],
+  ];
+  await add(teacher, course, '课程教学大纲',
+    await word(['课程教学大纲：程序设计', '总评成绩比例：平时：30%，期末：70%'], teachingHours), '大纲.docx');
+  await add(teacher, course, '课程教学大纲',
+    await word(['误归类的成绩明细', '样例甲 | 92 | 89'], teachingHours), '误归类的成绩明细.docx');
+  await add(teacher, course, '课程教学大纲',
+    await word(['含学号的学时表'], [...teachingHours, ['202600111', '2', '2', '2（2）', '', '']]), '含学号的学时表.docx');
   const second = await check(teacher, course);
+  assert.ok(second.result.rules.find((rule) => rule.code === 'C003').findings.some((finding) =>
+    finding.location.includes('提取文本第') && finding.location.includes('大纲.docx')));
+  assert.ok(modelRequests.some((request) => request.sources.some((source) => source.text.includes('数据库系统的基本原理 | 2 | 2'))));
+  assert.doesNotMatch(JSON.stringify(modelRequests), /样例甲|202600111|误归类的成绩明细|含学号的学时表/);
   const discrepancy = second.result.rules.find((r) => r.code === 'C023');
   assert.equal(second.result.verdict, 'failed');
   assert.equal(discrepancy.status, '需整改');
@@ -288,6 +331,43 @@ test('course and college material checks preserve scope, quantified differences,
     assert.equal(skipped.result.history, undefined);
     assert.equal((await admin(endpoint)).data.scope.term, '2026-2027 第1学期');
     assert.equal((await admin(endpoint)).data.scope.section, '第12教学班');
+  });
+
+  await t.test('ordinary images automatically reach the AI API, with local fallback and protected grades', async () => {
+    const created = await admin(base, { ...scope, title: '图片识别测试' });
+    assert.equal(created.status, 201);
+    const endpoint = `${base}/${created.data.id}`;
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aFMcAAAAASUVORK5CYII=', 'base64');
+    const outlineId = await add(admin, endpoint, '课程教学大纲', png, '大纲截图.PNG');
+    const gradeId = await add(admin, endpoint, '课程成绩单', png, '成绩单.png');
+    const checked = await check(admin, endpoint);
+    assert.equal(visionRequests.length, 1);
+    const request = visionRequests[0];
+    assert.equal(request.response_format, undefined);
+    assert.deepEqual(request.messages.at(-1).content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } });
+    assert.deepEqual(checked.result.files.find((f) => f.id === outlineId).warnings, []);
+    assert.match(checked.result.files.find((f) => f.id === gradeId).warnings[0], /本地/);
+    assert.ok(modelRequests.some((r) => r.sources.some((s) => s.location.includes('API 识图') && s.text === visionText)));
+
+    rejectImage = true;
+    const local = await check(admin, endpoint);
+    assert.equal(visionRequests.length, 2);
+    const warning = local.result.files.find((f) => f.id === outlineId).warnings[0];
+    assert.match(warning, /支持图片输入.*本地/);
+    assert.doesNotMatch(warning, /base64/);
+  });
+
+  await t.test('Anthropic sends an image as a base64 content block', async () => {
+    const image = { mediaType: 'image/jpeg', data: '/9j/4AAQSkZJRgABAQAAAQABAAD/' };
+    const response = await callAnthropic({ apiKey: 'mock-key', baseUrl: `http://127.0.0.1:${model.address().port}`,
+      model: 'mock', maxTokens: 512, timeoutSec: 5, effort: 'low', anthropicFallback: true, structured: false,
+      system: 'OCR', user: 'Transcribe image', image });
+    assert.deepEqual(visionRequests.at(-1).messages[0].content, [
+      { type: 'text', text: 'Transcribe image' },
+      { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
+    ]);
+    assert.equal(visionRequests.at(-1).thinking, undefined);
+    assert.equal(response.text, visionText);
   });
 });
 

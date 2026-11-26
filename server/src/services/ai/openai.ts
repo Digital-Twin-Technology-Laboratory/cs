@@ -9,15 +9,19 @@ export async function callOpenAICompatible(o: AiCallOptions): Promise<AiCallResu
     timeout: o.timeoutSec * 1000,
     maxRetries: 2,
   });
+  const content: OpenAI.Chat.Completions.ChatCompletionUserMessageParam['content'] = o.image ? [
+    { type: 'text', text: o.user },
+    { type: 'image_url', image_url: { url: `data:${o.image.mediaType};base64,${o.image.data}` } },
+  ] : o.user;
   const res = await client.chat.completions.create({
     model: o.model,
     temperature: o.temperature,
     max_tokens: o.maxTokens,
     messages: [
       { role: 'system', content: o.system },
-      { role: 'user', content: o.user },
+      { role: 'user', content },
     ],
-    ...(o.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
+    ...(o.jsonMode && !o.image ? { response_format: { type: 'json_object' as const } } : {}),
   });
   const choice = res.choices[0];
   return {
