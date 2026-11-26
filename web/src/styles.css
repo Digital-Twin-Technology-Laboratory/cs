@@ -353,7 +353,6 @@ body {
   font-size: 13px;
 }
 .material-issues {
-  max-width: 75ch;
   overflow-wrap: anywhere;
 }
 
