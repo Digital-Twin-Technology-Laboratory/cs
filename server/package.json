@@ -4,11 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "setup:ocr": "node ../scripts/setup-material-ocr.mjs",
-    "predev": "npm run setup:ocr",
     "dev": "tsx watch --disable-warning=ExperimentalWarning src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "prestart": "npm run setup:ocr",
     "start": "node --disable-warning=ExperimentalWarning dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
