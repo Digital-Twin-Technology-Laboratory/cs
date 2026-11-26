@@ -110,7 +110,7 @@ export function extractGradeRows(pages: MaterialPage[], edits: GradeEdit[] = [])
       }
       if (!headers.length) continue;
       if (!/^\d{1,4}$/.test(cells[headers.indexOf('序号')] ?? '') && !studentId(cells[headers.indexOf('学号')])) continue;
-      rows.push({ location: page.location, line: i + 1, ocr: false, uncertain: [],
+      rows.push({ location: page.location, line: i + 1, ocr: !!page.ocr, uncertain: [],
         cells: Object.fromEntries(headers.flatMap((h, j) => h ? [[h, cells[j] ?? '']] : [])) });
     }
   }

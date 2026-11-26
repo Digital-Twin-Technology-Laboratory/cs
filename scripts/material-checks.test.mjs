@@ -42,6 +42,11 @@ test('course and college material checks preserve scope, quantified differences,
   const visionRequests = [];
   const visionRow = '数据库系统的基本原理 | 2 | 2 | 4';
   const visionText = ['| 教学内容 | 理论学时 | 实践学时 | 合计 |', '| --- | ---: | ---: | ---: |', visionRow].join('\n');
+  const gradeVision = {
+    weights: '平时40%，期末60%',
+    columns: ['序号', '学号', '平时', '期末', '总评'],
+    rows: [['1', '001234567', '80', '90', '86'], ['2', '001234568', '0', '60', '36'], ['3', '001234569', '', '—', '']],
+  };
   let rejectImage = false;
   let imageReviewAttempts = 0;
   let invalidReview = false;
@@ -71,7 +76,8 @@ test('course and college material checks preserve scope, quantified differences,
         res.end(JSON.stringify({ error: { message: payload.messages.at(-1).content[1].image_url.url } }));
         return;
       }
-      res.end(JSON.stringify({ choices: [{ message: { content: visionText }, finish_reason: 'stop' }], model: 'mock' }));
+      const text = payload.messages.at(-1).content[0].text.includes('成绩表') ? JSON.stringify(gradeVision) : visionText;
+      res.end(JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }], model: 'mock' }));
       return;
     }
     const input = JSON.parse(payload.messages[1].content);
@@ -354,12 +360,24 @@ test('course and college material checks preserve scope, quantified differences,
     const outlineId = await add(admin, endpoint, '课程教学大纲', png, '大纲截图.PNG');
     const gradeId = await add(admin, endpoint, '课程成绩单', png, '成绩单.png');
     const checked = await check(admin, endpoint);
-    assert.equal(visionRequests.length, 1);
+    assert.equal(visionRequests.length, 2);
     const request = visionRequests[0];
     assert.equal(request.response_format, undefined);
     assert.deepEqual(request.messages.at(-1).content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } });
     assert.deepEqual(checked.result.files.find((f) => f.id === outlineId).warnings, []);
-    assert.match(checked.result.files.find((f) => f.id === gradeId).warnings[0], /未进行 AI 识图/);
+    assert.deepEqual(checked.result.files.find((f) => f.id === gradeId).warnings, []);
+    const { data: gradeImage } = await admin(`${endpoint}/files/${gradeId}/grades`);
+    assert.equal(gradeImage.scanned, true);
+    assert.deepEqual(gradeImage.weights, { 平时: 40, 期末: 60 });
+    assert.deepEqual(gradeImage.rows.map(({ cells }) => [cells.学号, cells.平时, cells.期末]), [
+      ['001234567', '80', '90'], ['001234568', '0', '60'], ['001234569', '', '—'],
+    ]);
+    assert.ok(gradeImage.rows.every((row) => row.ocr));
+    assert.equal(checked.result.stats.find((s) => s.id === gradeId).stats[0].count, 2);
+    assert.doesNotMatch(JSON.stringify(modelRequests), /00123456[789]/);
+    const [{ location, line }] = gradeImage.rows;
+    assert.equal((await admin(`${endpoint}/files/${gradeId}/grades`,
+      { edits: [{ location, line, column: '总评', value: '88' }], weightsVerified: true }, 'PUT')).status, 200);
     assert.ok(modelRequests.some((r) => r.sources.some((s) => s.location.includes('API 识图') && s.text === visionText)));
     assert.equal(imageReviewAttempts, 2);
     for (const code of ['C001', 'C003']) {
@@ -390,7 +408,8 @@ test('course and college material checks preserve scope, quantified differences,
     ].join('\n'));
     const pdfId = await add(admin, endpoint, '教学进度表（教学日历）', pdf, '教学日历.pdf');
     const reviewed = await check(admin, endpoint);
-    assert.equal(visionRequests.length, 3);
+    assert.equal(visionRequests.length, 4);
+    assert.equal(reviewed.result.stats.find((s) => s.id === gradeId).stats[0].mean, 62);
     const warning = reviewed.result.files.find((f) => f.id === outlineId).warnings[0];
     assert.match(warning, /支持图片输入/);
     assert.doesNotMatch(warning, /base64|本地/);

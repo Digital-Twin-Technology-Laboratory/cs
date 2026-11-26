@@ -73,7 +73,7 @@ const aiItem = z.object({
 export async function reviewMaterials(scope: MaterialScope, input: MaterialInput[], settings?: AiSettings): Promise<MaterialResult> {
   const results = scopeRules(scope, new Set(input.map((f) => f.type)));
   const files = input.map((f) => ({ id: f.id, name: f.name, type: f.type, warnings: f.pages.flatMap((p) =>
-    p.warning || !p.text.trim() ? [`${p.location}: ${p.warning || '未提取到内容'}`] : []) }));
+    p.warning || (!p.text.trim() && !p.rows?.length) ? [`${p.location}: ${p.warning || '未提取到内容'}`] : []) }));
   const grades = input.filter((f) => GRADE_TYPES.includes(f.type)).map((f) => ({
     file: f, rows: extractGradeRows(f.pages, f.edits), weights: f.weights ?? materialWeights(f.pages),
   }));
