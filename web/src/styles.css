@@ -353,34 +353,154 @@ body {
   font-size: 13px;
 }
 .material-issues {
+  display: grid;
+  align-items: start;
+  gap: 24px;
   overflow-wrap: anywhere;
 }
 
-.material-issues section + section {
-  margin-top: 24px;
+@media (min-width: 1024px) {
+  .material-issues-split {
+    grid-template-columns: minmax(0, 1fr) minmax(250px, 30%);
+  }
 }
 
-.material-issues h3 {
-  margin: 0 0 8px;
+.material-issues-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.material-issues-heading span {
+  color: #a12628;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.material-issue-block + .material-issue-block {
+  margin-top: 18px;
+}
+
+.material-issue-block h4 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid #1f4e8c;
+  background: #f3f6fb;
+  color: #213653;
   font-size: 14px;
 }
 
-.material-issues h3 .ant-tag {
-  font-size: inherit;
-  font-weight: 600;
+.material-issue-block h4 span {
+  flex: none;
+  color: #546171;
+  font-size: 12px;
+  font-weight: 400;
 }
 
-.material-issues ol {
+.material-issues ul {
   margin: 0;
-  padding-inline-start: 24px;
+  padding: 0;
+  list-style: none;
 }
 
-.material-issues li + li {
-  margin-top: 12px;
+.material-issue-block li + li,
+.material-issue-sidebar li + li {
+  border-top: 1px solid #e7ebf1;
 }
 
-.material-issue-detail {
+.material-issue summary {
+  position: relative;
+  display: block;
+  padding: 10px 32px 10px 12px;
+  cursor: pointer;
+}
+
+.material-issue summary:hover {
+  background: #f8fafc;
+}
+
+.material-issue summary::-webkit-details-marker {
+  display: none;
+}
+
+.material-issue summary::after {
+  position: absolute;
+  top: 15px;
+  right: 12px;
+  width: 7px;
+  height: 7px;
+  border: solid #546171;
+  border-width: 0 1px 1px 0;
+  transform: rotate(45deg);
+  content: '';
+}
+
+.material-issue[open] summary::after {
+  transform: rotate(225deg);
+}
+
+.material-issue-title {
+  display: block;
   font-weight: 600;
+}
+
+.material-issue-detail,
+.material-issue-action,
+.material-issue-meta {
+  display: block;
+  margin-top: 3px;
+}
+
+.material-issue:not([open]) .material-issue-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.material-issue-meta,
+.material-issue-evidence {
+  color: #546171;
+  font-size: 13px;
+}
+
+.material-issue-evidence {
+  padding: 0 12px 12px;
+}
+
+.material-issue-verify.ant-btn {
+  height: auto;
+  padding-inline: 0;
+  white-space: normal;
+  text-align: start;
+}
+
+.material-issue-sidebar .ant-collapse-header .material-issue-meta {
+  display: inline;
+  margin-inline-start: 8px;
+}
+
+.material-issue-sidebar li {
+  padding-block: 5px;
+}
+
+.material-issue-sidebar .material-issue summary {
+  padding-inline-start: 0;
+}
+
+.material-issue-sidebar .material-issue-evidence {
+  padding-inline-start: 0;
+}
+
+.material-issues p {
+  margin: 0 0 8px;
 }
 
 .section-title {

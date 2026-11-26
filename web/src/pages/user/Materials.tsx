@@ -30,9 +30,8 @@ type GradeData = { rows: GradeRow[]; edits: GradeEdit[]; weights: Record<string,
   scanned: boolean; weightsVerified: boolean };
 type Check = { code: string; title: string };
 type Rule = Check & { materials: string[]; status: string };
-type IssueGroup = { status: string; label: string; issues: {
-  detail: string; locations: string[]; materials: string[]; checks: Check[]; history?: string;
-}[] };
+type MaterialIssue = { title: string; detail: string; action?: string; locations: string[]; materials: string[]; checks: Check[]; history?: string };
+type IssueGroup = { status: string; label: string; count: number; materials: { material: string; issues: MaterialIssue[] }[] };
 type Result = { verdict: keyof typeof verdictNames; rules: Rule[]; files: { id: number; name: string; type: string; warnings: string[] }[];
   issueGroups: IssueGroup[];
   history?: { issue: HistoryIssue; status: string; detail: string; locations: { fileId: number; file: string; position: string }[] }[];
@@ -363,31 +362,56 @@ function CaseDetail({ id }: { id: string }) {
   </div>;
 }
 
+function IssueSummary({ result, onVerify }: { result: Result; onVerify?: (rule: Rule) => void }) {
+  const confirmed = result.issueGroups.find((group) => group.status === '需整改');
+  const others = result.issueGroups.filter((group) => group !== confirmed);
+  const verifiable = new Map(result.rules.filter((rule) => rule.status === '需核实' && rule.materials.length).map((rule) => [rule.code, rule]));
+  const renderIssue = (issue: MaterialIssue, material: string, status: string) => <details className="material-issue">
+    <summary>
+      <span className="material-issue-title">{issue.title}</span>
+      {!!issue.materials.length && (issue.materials.length !== 1 || issue.materials[0] !== material) &&
+        <span className="material-issue-meta">{issue.materials.join(' / ')}</span>}
+      {issue.detail !== issue.title && <span className="material-issue-detail">{issue.detail}</span>}
+      {issue.action && <span className="material-issue-action"><strong>怎么改：</strong>{issue.action}</span>}
+    </summary>
+    <div className="material-issue-evidence">
+      {issue.history && <div>往期反馈：{issue.history}</div>}
+      {issue.locations.map((location) => <div key={location}>位置：{location}</div>)}
+      {!!issue.checks.length && <div>检查项：{issue.checks.map((check, index) => {
+        const rule = status === '需核实' && verifiable.get(check.code);
+        return <span key={check.code}>{index > 0 && '；'}{rule && onVerify
+          ? <Button type="link" size="small" className="material-issue-verify" onClick={() => onVerify(rule)}>核实 {check.code} {check.title}</Button>
+          : `${check.code} ${check.title}`}</span>;
+      })}</div>}
+    </div>
+  </details>;
+  return <div className={`material-issues${confirmed && others.length ? ' material-issues-split' : ''}`}>
+    <section aria-label="优先整改">
+      <h3 className="material-issues-heading">优先整改{confirmed && <span>{confirmed.count} 项明确问题</span>}</h3>
+      {confirmed ? confirmed.materials.map(({ material, issues }) => <section key={material} className="material-issue-block">
+        <h4>{material}<span>{issues.length} 项</span></h4>
+        <ul>{issues.map((issue, i) => <li key={i}>{renderIssue(issue, material, confirmed.status)}</li>)}</ul>
+      </section>) : <p className="muted">本次没有已确认需要整改的问题。</p>}
+    </section>
+    {!!others.length && <aside aria-label="其他事项" className="material-issue-sidebar">
+      <h3 className="material-issues-heading">其他事项</h3>
+      <Collapse size="small" items={others.map(({ status, label, count, materials }) => ({ key: status,
+        label: <>{label}<span className="material-issue-meta">{count} 项</span></>,
+        children: <ul>{materials.flatMap(({ issues }) => issues).map((issue, i) => <li key={i}>
+          {status === '待补' ? issue.title : renderIssue(issue, '', status)}
+        </li>)}</ul>,
+      }))} />
+    </aside>}
+  </div>;
+}
+
 function ResultView({ url, result, onVerify }: { url: string; result: Result; onVerify?: (rule: Rule) => void }) {
   const types = [...new Set(result.files.map((f) => f.type))];
-  const verifiable = new Map(result.rules.filter((rule) => rule.status === '需核实' && rule.materials.length).map((rule) => [rule.code, rule]));
-  const issueCount = result.issueGroups.reduce((count, group) => count + group.issues.length, 0);
   return <Space direction="vertical" style={{ width: '100%' }} size="middle">
     <Alert showIcon type={result.verdict === 'passed' ? 'success' : result.verdict === 'partial' ? 'warning' : 'error'}
       message={`常规检查：${verdictNames[result.verdict]}`} />
     <Tabs items={[
-      { key: 'issues', label: `问题汇总（${issueCount}）`, children: result.issueGroups.length ? <div className="material-issues">
-        {result.issueGroups.map(({ status, label, issues }) => <section key={status}>
-          <h3><Tag color={colors[status]}>{label}</Tag><span className="muted">{issues.length} 项</span></h3>
-          <ol>{issues.map((issue, i) => <li key={i}>
-            <div className="material-issue-detail">{issue.detail}</div>
-            {issue.history && <div className="muted">往期反馈：{issue.history}</div>}
-            {issue.locations.map((location) => <div className="muted" key={location}>位置：{location}</div>)}
-            {!!issue.materials.length && <div className="muted">涉及材料：{issue.materials.join('、')}</div>}
-            {!!issue.checks.length && <div className="muted">检查项：{issue.checks.map((check, index) => {
-              const rule = status === '需核实' && verifiable.get(check.code);
-              return <span key={check.code}>{index > 0 && '；'}{rule && onVerify
-                ? <Button type="link" size="small" style={{ paddingInline: 0, whiteSpace: 'normal', height: 'auto', textAlign: 'start' }} onClick={() => onVerify(rule)}>核实 {check.code} {check.title}</Button>
-                : `${check.code} ${check.title}`}</span>;
-            })}</div>}
-          </li>)}</ol>
-        </section>)}
-      </div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次没有需要处理的事项" /> },
+      { key: 'issues', label: '整改清单', children: <IssueSummary result={result} onVerify={onVerify} /> },
       { key: 'material', label: '材料与成绩统计', children: <Collapse items={types.map((type) => {
         const files = result.files.filter((f) => f.type === type);
         const stats = result.stats.filter((s) => files.some((f) => f.id === s.id));

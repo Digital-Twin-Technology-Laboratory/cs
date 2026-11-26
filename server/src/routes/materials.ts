@@ -387,23 +387,30 @@ materialsRouter.get('/:caseId/runs/:runId/report.docx', async (req, res) => {
   const r = resultForUser(run, req.user!);
   const { scope } = JSON.parse(run.snapshot_json) as RunSnapshot;
   const groups = materialIssueGroups(r);
-  const doc = new Document({ styles: { default: { title: { run: { color: '000000' } }, heading1: { run: { color: '000000' } } } }, sections: [{ children: [
+  const doc = new Document({ styles: { default: { title: { run: { color: '000000' } }, heading1: { run: { color: '000000' } },
+    heading2: { run: { color: '000000' } } } }, sections: [{ children: [
     new Paragraph({ text: '教学材料问题汇总', heading: HeadingLevel.TITLE }),
     new Paragraph([scope.title, scope.term, scope.section, scope.major, scope.group].filter(Boolean).join(' · ')),
     new Paragraph(`常规检查：${results[r.verdict]} · 检查 #${run.id} · ${run.finished_at}`),
-    new Paragraph(groups.length ? groups.map(({ label, issues }) => `${label} ${issues.length} 项`).join('　') : '本次没有需要处理的事项。'),
-    ...groups.flatMap(({ label, issues }) => [
+    new Paragraph(groups.length ? groups.map(({ label, count }) => `${label} ${count} 项`).join('　') : '本次没有需要处理的事项。'),
+    ...groups.flatMap(({ label, materials }) => [
       new Paragraph({ text: label, heading: HeadingLevel.HEADING_1 }),
-      ...issues.flatMap((issue, i) => {
-        const notes = [
-          issue.history && `往期反馈：${issue.history}`,
-          ...issue.locations.map((location) => `位置：${location}`),
-          issue.materials.length && `涉及材料：${issue.materials.join('、')}`,
-          issue.checks.length && `检查项：${issue.checks.map(({ code, title }) => `${code} ${title}`).join('；')}`,
-        ].filter((note): note is string => !!note);
-        return [new Paragraph({ text: `${i + 1}. ${issue.detail}`, spacing: { before: 120 }, keepNext: !!notes.length }),
+      ...materials.flatMap(({ material, issues }) => [
+        ...(material ? [new Paragraph({ text: material, heading: HeadingLevel.HEADING_2 })] : []),
+        ...issues.flatMap((issue, i) => {
+          const notes = [
+            issue.history && `往期反馈：${issue.history}`,
+            issue.materials.length && (issue.materials.length !== 1 || issue.materials[0] !== material) && `涉及材料：${issue.materials.join(' / ')}`,
+            ...issue.locations.map((location) => `位置：${location}`),
+            issue.checks.length && `检查项：${issue.checks.map(({ code, title }) => title === issue.title ? code : `${code} ${title}`).join('；')}`,
+          ].filter((note): note is string => !!note);
+          return [new Paragraph({ children: [new TextRun({ text: `${i + 1}. ${issue.title}`, bold: true })],
+            spacing: { before: 120 }, keepNext: issue.title !== issue.detail || !!issue.action || !!notes.length }),
+          ...(issue.title !== issue.detail ? [new Paragraph(issue.detail)] : []),
+          ...(issue.action ? [new Paragraph(`怎么改：${issue.action}`)] : []),
           ...notes.map((note) => new Paragraph({ children: [new TextRun({ text: note, color: '475569', size: 20 })] }))];
-      }),
+        }),
+      ]),
     ]),
   ] }] });
   const buffer = await Packer.toBuffer(doc);
