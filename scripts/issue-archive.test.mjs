@@ -118,6 +118,8 @@ test('person issue archive aggregates repeated syllabus checks, imports multi-fo
   assert.equal(dossierBefore.data.summary.outlineResolvedInLater, 1);
 
   const agg = dossierBefore.data.outlineCourses[0].aggregatedIssues;
+  // 按 重大问题 -> 明确问题 -> 建议修改 排序（即使明确问题已消，也排在建议修改之前）
+  assert.deepEqual(agg.map((i) => i.nature), ['重大问题', '明确问题', '建议修改']);
   const aggA = agg.find((i) => i.title === issueA.title);
   const aggB = agg.find((i) => i.title === issueB.title);
   const aggC = agg.find((i) => i.title === issueC.title);

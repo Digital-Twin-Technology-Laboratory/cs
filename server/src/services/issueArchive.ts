@@ -570,8 +570,8 @@ function buildOutlineCoursesForPerson(
     }
 
     const aggregatedIssues = [...merged.values()].sort((a, b) =>
-      Number(b.presentInLatest) - Number(a.presentInLatest)
-      || natureRank[a.nature] - natureRank[b.nature]
+      natureRank[a.nature] - natureRank[b.nature]
+      || Number(b.presentInLatest) - Number(a.presentInLatest)
       || b.occurrenceCount - a.occurrenceCount
       || b.lastSeenAt.localeCompare(a.lastSeenAt),
     );
