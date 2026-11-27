@@ -10,9 +10,6 @@ export function AuthTitle({ sub }: { sub: string }) {
   const { site } = useAuth();
   return (
     <div className="auth-title">
-      <span className="brand-mark" style={{ width: 40, height: 40, fontSize: 20, borderRadius: 8 }}>
-        纲
-      </span>
       <h1>{site?.siteName}</h1>
       <p>{sub}</p>
     </div>

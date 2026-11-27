@@ -33,8 +33,7 @@ export default function AppLayout() {
     <Layout style={{ minHeight: '100vh' }}>
       <Layout.Header className="app-header">
         <Link to="/" className="brand">
-          <span className="brand-mark">纲</span>
-          <span className="brand-text">{site?.siteName}</span>
+          <span className="brand-title">{site?.siteName}</span>
         </Link>
         <Menu mode="horizontal" selectedKeys={[selected]} items={items} />
         {checkQuota && (

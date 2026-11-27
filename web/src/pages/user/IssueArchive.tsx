@@ -19,13 +19,10 @@ import {
   CloudUploadOutlined,
   DatabaseOutlined,
   DeleteOutlined,
-  FileTextOutlined,
-  HistoryOutlined,
   LinkOutlined,
   RightOutlined,
   SearchOutlined,
   UnorderedListOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { api, qs } from '../../api';
@@ -128,7 +125,7 @@ export default function IssueArchive() {
   const removeSource = async (source: string) => {
     try {
       const res = await api.del<{ removed: number }>('/api/issue-archive/imports', { source });
-      message.success(`已删除「${source}」的 ${res.removed} 条历史记录`);
+      message.success(`已删除「${source}」的 ${res.removed} 条记录`);
       await Promise.all([loadSources(), load()]);
     } catch (e) {
       message.error((e as Error).message);
@@ -143,9 +140,14 @@ export default function IssueArchive() {
       <div className="page-head">
         <div>
           <h1>问题记录汇总</h1>
-          <div className="sub">
-            按人员归集大纲历次检查、历史导入表格与全套材料检查的全部问题；同份大纲多次检查的不同问题自动合并去重，点击任意人员即可弹出完整问题档案。
-          </div>
+          {stats && (
+            <div className="archive-inline-summary">
+              <span>涉及 <strong>{stats.peopleWithIssues}</strong> / {stats.totalPeople} 人</span>
+              <span>大纲 <strong>{stats.totalOutlineIssues}</strong> 项</span>
+              <span>历史导入 <strong>{stats.totalHistoryIssues}</strong> 条</span>
+              {stats.totalMaterialIssues > 0 && <span>全套材料 <strong>{stats.totalMaterialIssues}</strong> 项</span>}
+            </div>
+          )}
         </div>
         <Space wrap>
           {data?.canImport && (
@@ -154,7 +156,7 @@ export default function IssueArchive() {
                 已导入来源{stats?.importedSourcesCount ? `（${stats.importedSourcesCount}）` : ''}
               </Button>
               <Button type="primary" icon={<CloudUploadOutlined />} onClick={() => setImportOpen(true)}>
-                导入历史问题（链接 / 文件）
+                导入历史问题
               </Button>
             </>
           )}
@@ -163,61 +165,22 @@ export default function IssueArchive() {
 
       {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />}
 
-      {/* 顶部关系总览指标条 */}
-      {stats && (
-        <div className="archive-kpi-grid">
-          <div className="archive-kpi-card">
-            <div className="archive-kpi-label">涉及教师</div>
-            <div className="archive-kpi-val">
-              <strong>{stats.peopleWithIssues}</strong>
-              <span className="muted"> / {stats.totalPeople} 人</span>
-            </div>
-            <div className="archive-kpi-note">点击任意人员卡片查看全部问题</div>
-          </div>
-          <div className="archive-kpi-card accent-blue">
-            <div className="archive-kpi-label">大纲多次检查汇总</div>
-            <div className="archive-kpi-val">
-              <strong>{stats.totalOutlineIssues}</strong>
-              <span className="muted"> 项</span>
-            </div>
-            <div className="archive-kpi-note">同份大纲多次检查问题自动去重</div>
-          </div>
-          <div className="archive-kpi-card accent-purple">
-            <div className="archive-kpi-label">历史导入问题</div>
-            <div className="archive-kpi-val">
-              <strong>{stats.totalHistoryIssues}</strong>
-              <span className="muted"> 条</span>
-            </div>
-            <div className="archive-kpi-note">来自 {stats.importedSourcesCount} 个在线表格或上传文件</div>
-          </div>
-          <div className="archive-kpi-card accent-cyan">
-            <div className="archive-kpi-label">全套材料检查</div>
-            <div className="archive-kpi-val">
-              <strong>{stats.totalMaterialIssues}</strong>
-              <span className="muted"> 项</span>
-            </div>
-            <div className="archive-kpi-note">后续新检查出现的问题会自动同步</div>
-          </div>
-        </div>
-      )}
-
-      {/* 筛选与视图工具栏 */}
-      <Card className="archive-toolbar-card" styles={{ body: { padding: '14px 18px' } }}>
+      <Card className="archive-toolbar-card" styles={{ body: { padding: '12px 16px' } }}>
         <div className="archive-toolbar">
           <div className="archive-toolbar-left">
             <Input
               allowClear
               prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
-              placeholder="搜索教师姓名、工号、课程名称或问题关键词"
+              placeholder="搜索姓名、工号、课程或问题"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              style={{ width: 'min(320px, 100%)' }}
+              style={{ width: 'min(260px, 100%)' }}
             />
             <Segmented
               value={sourceFilter}
               onChange={(v) => setSourceFilter(v as typeof sourceFilter)}
               options={[
-                { value: 'all', label: '全部来源' },
+                { value: 'all', label: '全部' },
                 { value: 'outline', label: '大纲检查' },
                 { value: 'history', label: '历史导入' },
                 { value: 'material', label: '全套材料' },
@@ -227,7 +190,7 @@ export default function IssueArchive() {
           <div className="archive-toolbar-right">
             <label className="dossier-switch-label">
               <Switch size="small" checked={onlyWithIssues} onChange={setOnlyWithIssues} />
-              <span>仅显示有问题记录</span>
+              <span>仅看有记录</span>
             </label>
             <Segmented
               size="small"
@@ -242,22 +205,15 @@ export default function IssueArchive() {
         </div>
       </Card>
 
-      {/* 人员问题目录 */}
       <Spin spinning={loading}>
         {!loading && people.length === 0 ? (
           <Card>
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                onlyWithIssues && (stats?.totalPeople ?? 0) > 0
-                  ? '当前条件下暂无有问题记录的人员，可关闭「仅显示有问题记录」查看全部人员，或导入历史问题文档。'
-                  : '暂无匹配的人员问题记录'
-              }
+              description={onlyWithIssues && (stats?.totalPeople ?? 0) > 0 ? '暂无符合条件的问题记录' : '暂无人员记录'}
             >
               <Space wrap>
-                {onlyWithIssues && (
-                  <Button onClick={() => setOnlyWithIssues(false)}>查看全部人员</Button>
-                )}
+                {onlyWithIssues && <Button onClick={() => setOnlyWithIssues(false)}>显示全部人员</Button>}
                 {data?.canImport && (
                   <Button type="primary" icon={<CloudUploadOutlined />} onClick={() => setImportOpen(true)}>
                     导入历史问题
@@ -273,7 +229,7 @@ export default function IssueArchive() {
                 key={person.personKey}
                 role="button"
                 tabIndex={0}
-                className={`archive-person-card${person.totalIssues > 0 ? ' has-issues' : ''}`}
+                className="archive-person-card"
                 onClick={() => setSelectedPerson(person.personKey)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -283,40 +239,36 @@ export default function IssueArchive() {
                 }}
               >
                 <div className="archive-person-head">
-                  <div className={`archive-avatar${person.totalIssues === 0 ? ' is-quiet' : ''}`}>
-                    {person.name ? person.name.slice(0, 1) : <UserOutlined />}
-                  </div>
                   <div className="archive-person-id">
                     <div className="archive-person-name-row">
                       <strong>{person.name}</strong>
-                      {!person.matchedAccount && <Tag color="gold" bordered={false}>仅历史记录</Tag>}
+                      {person.username && <span className="dossier-staff-no">{person.username}</span>}
+                      {!person.matchedAccount && <Tag color="gold" bordered={false}>仅历史</Tag>}
                     </div>
-                    <div className="muted small">
-                      {[person.username, person.department].filter(Boolean).join(' · ') || '未关联工号'}
-                    </div>
+                    {person.department && <div className="muted small">{person.department}</div>}
                   </div>
                   <div className={`archive-total-pill${person.totalIssues > 0 ? ' is-warn' : ''}`}>
                     <span className="pill-num">{person.totalIssues}</span>
-                    <span className="pill-unit">项问题</span>
+                    <span className="pill-unit">项</span>
                   </div>
                 </div>
 
                 <div className="archive-person-metrics">
                   <div className="mini-metric">
-                    <span className="mini-label"><FileTextOutlined /> 大纲汇总</span>
+                    <span className="mini-label">大纲</span>
                     <span className="mini-val">
                       <strong>{person.outlineDistinctIssues}</strong>
                       {person.outlineLatestRemaining > 0 && (
-                        <span className="mini-sub-danger">（{person.outlineLatestRemaining} 仍存）</span>
+                        <span className="mini-sub-danger"> · {person.outlineLatestRemaining} 仍存</span>
                       )}
                     </span>
                   </div>
                   <div className="mini-metric">
-                    <span className="mini-label"><HistoryOutlined /> 历史导入</span>
+                    <span className="mini-label">历史</span>
                     <span className="mini-val"><strong>{person.historyIssuesCount}</strong></span>
                   </div>
                   <div className="mini-metric">
-                    <span className="mini-label">全套材料</span>
+                    <span className="mini-label">材料</span>
                     <span className="mini-val"><strong>{person.materialIssuesCount}</strong></span>
                   </div>
                 </div>
@@ -328,20 +280,20 @@ export default function IssueArchive() {
                         <Tag key={name} bordered={false} className="archive-course-tag">{name}</Tag>
                       ))}
                       {person.courseNames.length > 3 && (
-                        <Tag bordered={false} className="archive-course-tag">+{person.courseNames.length - 3} 门</Tag>
+                        <Tag bordered={false} className="archive-course-tag">+{person.courseNames.length - 3}</Tag>
                       )}
                     </>
                   ) : (
-                    <span className="muted small">暂无问题课程</span>
+                    <span className="muted small">无问题课程</span>
                   )}
                 </div>
 
                 <div className="archive-person-foot">
                   <span className="muted small">
-                    {person.latestActivityAt ? `最近记录：${person.latestActivityAt.slice(0, 16)}` : '暂无检查记录'}
+                    {person.latestActivityAt ? person.latestActivityAt.slice(0, 10) : '—'}
                   </span>
                   <span className="archive-open-link">
-                    查看全部问题 <RightOutlined style={{ fontSize: 11 }} />
+                    查看详情 <RightOutlined style={{ fontSize: 10 }} />
                   </span>
                 </div>
               </div>
@@ -352,8 +304,8 @@ export default function IssueArchive() {
             <Table<ArchivePerson>
               rowKey="personKey"
               dataSource={people}
-              scroll={{ x: 960 }}
-              pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 位人员` }}
+              scroll={{ x: 920 }}
+              pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 人` }}
               onRow={(record) => ({
                 onClick: () => setSelectedPerson(record.personKey),
                 style: { cursor: 'pointer' },
@@ -366,59 +318,54 @@ export default function IssueArchive() {
                     <div>
                       <Space size={6}>
                         <strong>{r.name}</strong>
-                        {!r.matchedAccount && <Tag color="gold" bordered={false}>仅历史记录</Tag>}
+                        {!r.matchedAccount && <Tag color="gold" bordered={false}>仅历史</Tag>}
                       </Space>
                       <div className="muted small">{[r.username, r.department].filter(Boolean).join(' · ') || '—'}</div>
                     </div>
                   ),
                 },
                 {
-                  title: '汇总总问题',
-                  width: 120,
+                  title: '总问题',
+                  width: 100,
                   sorter: (a, b) => a.totalIssues - b.totalIssues,
-                  render: (_, r) => (
-                    <Tag color={r.totalIssues > 0 ? 'volcano' : 'default'}>{r.totalIssues} 项</Tag>
-                  ),
+                  render: (_, r) => <Tag color={r.totalIssues > 0 ? 'volcano' : 'default'}>{r.totalIssues}</Tag>,
                 },
                 {
-                  title: '大纲检查汇总',
-                  width: 170,
+                  title: '大纲检查',
+                  width: 150,
                   render: (_, r) => r.outlineDistinctIssues > 0 ? (
-                    <div>
-                      <strong>{r.outlineDistinctIssues} 项</strong>
-                      <span className="muted small">（{r.outlineChecksCount} 次检查）</span>
-                      {r.outlineLatestRemaining > 0 && (
-                        <div className="small" style={{ color: '#cf1322' }}>最新仍存 {r.outlineLatestRemaining} 项</div>
-                      )}
-                    </div>
+                    <span>
+                      <strong>{r.outlineDistinctIssues}</strong>
+                      {r.outlineLatestRemaining > 0 && <span className="mini-sub-danger">（{r.outlineLatestRemaining} 仍存）</span>}
+                    </span>
                   ) : <span className="muted">—</span>,
                 },
                 {
                   title: '历史导入',
-                  width: 110,
-                  render: (_, r) => r.historyIssuesCount > 0 ? <Tag color="purple">{r.historyIssuesCount} 条</Tag> : <span className="muted">—</span>,
+                  width: 100,
+                  render: (_, r) => r.historyIssuesCount > 0 ? r.historyIssuesCount : <span className="muted">—</span>,
                 },
                 {
                   title: '全套材料',
-                  width: 110,
-                  render: (_, r) => r.materialIssuesCount > 0 ? <Tag color="cyan">{r.materialIssuesCount} 项</Tag> : <span className="muted">—</span>,
+                  width: 100,
+                  render: (_, r) => r.materialIssuesCount > 0 ? r.materialIssuesCount : <span className="muted">—</span>,
                 },
                 {
                   title: '涉及课程',
                   render: (_, r) => r.courseNames.length ? (
                     <Space wrap size={4}>
                       {r.courseNames.slice(0, 4).map((name) => <Tag key={name} bordered={false}>{name}</Tag>)}
-                      {r.courseNames.length > 4 && <span className="muted small">等 {r.courseNames.length} 门</span>}
+                      {r.courseNames.length > 4 && <span className="muted small">+{r.courseNames.length - 4}</span>}
                     </Space>
                   ) : <span className="muted">—</span>,
                 },
                 {
                   title: '操作',
-                  width: 120,
+                  width: 90,
                   fixed: 'right',
                   render: (_, r) => (
                     <Button type="link" size="small" onClick={(e) => { e.stopPropagation(); setSelectedPerson(r.personKey); }}>
-                      弹出问题汇总
+                      查看
                     </Button>
                   ),
                 },
@@ -428,32 +375,22 @@ export default function IssueArchive() {
         )}
       </Spin>
 
-      {/* 弹出式个人完整问题档案 */}
       <PersonIssueModal personKey={selectedPerson} onClose={() => setSelectedPerson(null)} />
 
-      {/* 导入历史问题弹窗 */}
       <HistoryImportModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImported={() => { void load(); }}
       />
 
-      {/* 已导入来源管理弹窗 */}
       <Modal
         open={sourcesOpen}
         onCancel={() => setSourcesOpen(false)}
         footer={null}
-        title="已导入的历史问题来源"
-        width={760}
+        title="已导入来源"
+        width={720}
         destroyOnHidden
       >
-        <Alert
-          type="info"
-          showIcon
-          title="此处列出所有通过文档链接或文件导入的历史问题来源"
-          description="如需撤销某次误导入的整表记录，可点击右侧删除；仅删除导入的历史记录，不影响系统内的大纲或材料检查结果。"
-          style={{ marginBottom: 16 }}
-        />
         <Table<ImportedSource>
           rowKey={(r) => `${r.source}|${r.sourceUrl}`}
           loading={sourcesLoading}
@@ -463,31 +400,29 @@ export default function IssueArchive() {
           locale={{ emptyText: '暂未导入任何历史问题文档' }}
           columns={[
             {
-              title: '来源文档 / 链接',
+              title: '来源',
               render: (_, r) => (
                 <div>
                   <strong>{r.source}</strong>
                   {r.sourceUrl && (
                     <div className="small">
                       <a href={r.sourceUrl} target="_blank" rel="noopener noreferrer">
-                        <LinkOutlined /> 打开原在线文档
+                        <LinkOutlined /> 打开原文档
                       </a>
                     </div>
                   )}
-                  {r.uploader && <div className="muted small">导入人：{r.uploader}</div>}
                 </div>
               ),
             },
-            { title: '记录数', width: 90, render: (_, r) => <Tag color="purple">{r.count} 条</Tag> },
-            { title: '导入时间', width: 160, dataIndex: 'latestAt' },
+            { title: '条数', width: 80, render: (_, r) => r.count },
+            { title: '时间', width: 150, dataIndex: 'latestAt' },
             {
               title: '操作',
-              width: 90,
+              width: 80,
               render: (_, r) => (
                 <Popconfirm
-                  title={`删除「${r.source}」的全部 ${r.count} 条历史问题？`}
-                  description="删除后可随时重新导入。"
-                  okText="确认删除"
+                  title={`删除「${r.source}」的全部 ${r.count} 条记录？`}
+                  okText="删除"
                   okButtonProps={{ danger: true }}
                   onConfirm={() => void removeSource(r.source)}
                 >
