@@ -48,18 +48,43 @@ const numeric = (message: Message, field: number) => {
   return typeof value === 'number' ? value : 0;
 };
 
-function decodeCellValue(valueMsg: Message, strings: string[]): string {
+function extractRichText(entryBytes: Buffer): string {
+  const rich = protobuf(entryBytes);
+  const runs = rich.get(3) ?? [];
+  const parts: string[] = [];
+  for (const runBytes of runs) {
+    if (!Buffer.isBuffer(runBytes)) continue;
+    const run = protobuf(runBytes);
+    const textWrap = run.get(3)?.[0];
+    if (Buffer.isBuffer(textWrap)) {
+      const textMsg = protobuf(textWrap);
+      const raw = textMsg.get(1)?.[0];
+      if (Buffer.isBuffer(raw)) parts.push(raw.toString('utf8'));
+    }
+  }
+  return parts.join('');
+}
+
+function decodeCellValue(valueMsg: Message, strings: string[], richTexts: string[], floats: number[]): string {
   const type = numeric(valueMsg, 1);
   if (type === 4) {
     const idx = numeric(nested(valueMsg, 2), 1);
     return strings[idx] ?? '';
+  }
+  if (type === 6) {
+    const payload = valueMsg.get(2)?.[0];
+    const idx = Buffer.isBuffer(payload) ? numeric(protobuf(payload), 1) : 0;
+    return richTexts[idx] ?? '';
   }
   if (type === 2 || type === 3) {
     const payload = valueMsg.get(2)?.[0];
     if (Buffer.isBuffer(payload)) {
       const inner = protobuf(payload);
       const raw = inner.get(1)?.[0];
-      if (typeof raw === 'number') return String(raw);
+      if (typeof raw === 'number') {
+        if (type === 3 && raw >= 0 && raw < floats.length) return String(floats[raw]);
+        return String(raw);
+      }
       if (Buffer.isBuffer(raw) && raw.length === 8) {
         const num = raw.readDoubleLE(0);
         return Number.isFinite(num) ? String(num) : '';
@@ -86,9 +111,18 @@ function readBlock(encoded: string, table: string[][]) {
   for (const operation of operations.filter((value) => numeric(value, 1) === 18)) {
     found = true;
     const cells = nested(operation, 19);
-    const strings = (nested(cells, 5).get(1) ?? []).map((entry) => {
+    const pool = nested(cells, 5);
+    const strings = (pool.get(1) ?? []).map((entry) => {
       const buf = protobuf(entry as Buffer).get(1)?.[0];
       return Buffer.isBuffer(buf) ? buf.toString('utf8') : '';
+    });
+    const richTexts = (pool.get(2) ?? []).map((entry) =>
+      Buffer.isBuffer(entry) ? extractRichText(entry) : '',
+    );
+    const floats = (pool.get(3) ?? []).map((entry) => {
+      if (!Buffer.isBuffer(entry)) return NaN;
+      const buf = protobuf(entry).get(1)?.[0];
+      return Buffer.isBuffer(buf) && buf.length === 8 ? buf.readDoubleLE(0) : NaN;
     });
     for (const bytes of cells.get(6) ?? []) {
       const cell = protobuf(bytes as Buffer);
@@ -98,7 +132,7 @@ function readBlock(encoded: string, table: string[][]) {
       if (!Buffer.isBuffer(valueBytes)) continue;
       const value = protobuf(valueBytes);
       table[row] ??= [];
-      table[row][column] = decodeCellValue(value, strings);
+      table[row][column] = decodeCellValue(value, strings, richTexts, floats);
     }
   }
   return found;

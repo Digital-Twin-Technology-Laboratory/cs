@@ -111,11 +111,15 @@ function stripTrailingPunctuation(text: string): string {
   return text.replace(/[。，、；：！？.,;:!?\s]+$/g, '').trim();
 }
 
-function isMatrixProblemCell(rawValue: string): boolean {
+function isMatrixProblemCell(rawValue: string, checkItem = ''): boolean {
   const trimmed = clean(rawValue);
   if (!trimmed) return false;
   const norm = stripTrailingPunctuation(normalize(trimmed));
   if (!norm || MATRIX_OK_VALUES.has(norm)) return false;
+  // Pure repeated positive answers like "是是", "是、是", "√√"
+  if (/^(?:[是✓✔√☑][\s、,，;；]*)+$/.test(norm)) return false;
+  // Excel/Tencent Docs stores "100%" as numeric 1 in 100-point/ratio columns
+  if ((norm === '1' || norm === '100%' || norm === '100') && /100分|比例|百分/.test(checkItem)) return false;
   if (/^[2-9]\d*\s*种$/.test(norm) || /^[二两三四五六七八九十]\s*种$/.test(norm)) return false;
   return true;
 }
@@ -291,10 +295,14 @@ function isFlatHeaderRow(line: string[]): boolean {
 
 function findMatrixHeaderIndex(headers: string[][]): number {
   return headers.findIndex((line) => {
-    const hasCourse = FLAT_COURSE_NAMES.some((key) => line.includes(key));
     const hasTeacher = TEACHER_HEADERS.some((key) => line.includes(key));
-    if (!hasCourse || !hasTeacher) return false;
-    const nonMetaCount = line.filter((cell) => cell && !MATRIX_METADATA_HEADERS.has(cell)).length;
+    if (!hasTeacher) return false;
+    const hasCourseOrContext = FLAT_COURSE_NAMES.some((key) => line.includes(key))
+      || CONTEXT_HEADERS.some((key) => line.includes(key))
+      || line.includes('学年')
+      || line.includes('检查人');
+    if (!hasCourseOrContext) return false;
+    const nonMetaCount = line.filter((cell) => cell && !MATRIX_METADATA_HEADERS.has(cell) && !/^\d+$/.test(cell)).length;
     return nonMetaCount >= 3;
   });
 }
@@ -429,9 +437,14 @@ function parseMatrixSheet(
 
   // Locate metadata column indices
   const findCol = (keys: string[]) => header.findIndex((cell) => keys.includes(cell));
-  const courseCol = findCol(FLAT_COURSE_NAMES);
-  const codeCol = findCol(FLAT_CODES);
   const teacherCol = findCol(TEACHER_HEADERS);
+  let courseCol = findCol(FLAT_COURSE_NAMES);
+  // If the "课程名称" header cell was accidentally overwritten (e.g. "1") or blank, infer col before teacherCol
+  if (courseCol < 0 && teacherCol > 0) {
+    const candidate = teacherCol - 1;
+    if (!MATRIX_METADATA_HEADERS.has(header[candidate] ?? '')) courseCol = candidate;
+  }
+  const codeCol = findCol(FLAT_CODES);
   const staffCol = findCol(STAFF_NO_HEADERS);
   const yearCol = findCol(['学年']);
   const semCol = findCol(['学期', '学年学期']);
@@ -443,12 +456,13 @@ function parseMatrixSheet(
 
   // Determine the first check column (first column after metadata that has a non-meta header or upper-row category)
   const metaCols = new Set<number>();
-  let lastMetaCol = -1;
+  if (courseCol >= 0) metaCols.add(courseCol);
+  let lastMetaCol = courseCol;
   for (let c = 0; c < totalCols; c++) {
     const h = header[c] ?? '';
     if (h && MATRIX_METADATA_HEADERS.has(h)) {
       metaCols.add(c);
-      lastMetaCol = c;
+      if (c > lastMetaCol) lastMetaCol = c;
     }
   }
   const checkStartCol = Math.max(0, lastMetaCol + 1);
@@ -506,7 +520,7 @@ function parseMatrixSheet(
 
     for (const { col, category, checkItem } of checkCols) {
       const cellValue = clean(cells[col]);
-      if (!isMatrixProblemCell(cellValue)) continue;
+      if (!isMatrixProblemCell(cellValue, checkItem)) continue;
       const text = `【${checkItem}】${cellValue}`;
       const status = staffMismatch
         ? 'invalid'

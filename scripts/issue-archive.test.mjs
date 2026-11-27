@@ -180,6 +180,24 @@ test('person issue archive aggregates repeated syllabus checks, imports multi-fo
   assert.equal(matrixImported.status, 200);
   assert.deepEqual(matrixImported.data, { added: 2, duplicates: 0, skipped: 0 });
 
+  // 2b) 核查矩阵表首列表头被误改（如填成 "1"），且包含 "是是" 与 100分列里的 "1"（100%），应容错识别且不误报
+  const typoMatrixXlsx = makeXlsx([[
+    '核查表',
+    [
+      ['', '', '', '', '', '平时成绩记录表', '', ''],
+      ['1', '教师名称', '学年', '学期', '检查人', '平时考核记录表比例为100分', '平时成绩取整，不少于2种方式', '项目名称与大纲一致'],
+      ['示例程序设计', '示例王老师', '2025-2026', '2', '示例钱老师', '1', '是是', '否'],
+    ],
+  ]]);
+  const typoForm = new FormData();
+  typoForm.set('file', new Blob([typoMatrixXlsx]), '表头误改矩阵.xlsx');
+  const typoPreview = await admin('/api/materials/history/preview', typoForm);
+  assert.equal(typoPreview.status, 200, JSON.stringify(typoPreview.data));
+  assert.equal(typoPreview.data.format, 'matrix');
+  assert.equal(typoPreview.data.rows.length, 1);
+  assert.equal(typoPreview.data.rows[0].course.name, '示例程序设计');
+  assert.equal(typoPreview.data.rows[0].checkItem, '项目名称与大纲一致');
+
   // 3) 上传含表格的 Word (.docx)
   const docxBuffer = await Packer.toBuffer(new Document({
     sections: [{
