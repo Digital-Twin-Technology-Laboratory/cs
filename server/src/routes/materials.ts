@@ -10,14 +10,28 @@ import { findPlan, kickQueue } from '../services/checkQueue.js';
 import { CHECK_QUOTA_ERROR, getCheckQuota } from '../services/checkQuota.js';
 import { availableMaterials, optionalMaterials, flags, materialScopeSchema, materialVersion, planMaterial, scopeRules, type MaterialScope } from '../services/materialChecklist.js';
 import { MATERIAL_EXTENSIONS } from '../services/materialExtract.js';
-import { EXCEL_EXTENSIONS } from '../services/xlsWorkbook.js';
 import { extractGradeRows, GRADE_TYPES, materialWeights } from '../services/materialGrades.js';
 import { materialIssueReport } from '../services/materialIssues.js';
 import { canAccessMaterial, filePages, fullAccess, type MaterialCaseRow, type MaterialFileRow, type MaterialRunRow, type RunSnapshot } from '../services/materialRuns.js';
 import type { MaterialResult } from '../services/materialReview.js';
 import { absPath, cleanupTmp, removeFile, sendStored, singleUpload, storeFile } from '../services/upload.js';
 import { GROUP_PRESETS } from '../services/supervisionRoles.js';
-import { canManageHistory, courseHistory, courseKey, groupHistoryIssues, historyCourses, historyIssues, importHistory, previewHistory } from '../services/materialHistory.js';
+import {
+  canManageHistory,
+  consumeCachedPreview,
+  courseHistory,
+  courseKey,
+  createFileHistoryPreview,
+  createUrlHistoryPreview,
+  deleteCachedPreview,
+  groupHistoryIssues,
+  HISTORY_UPLOAD_EXTENSIONS,
+  historyCourses,
+  historyIssues,
+  importHistory,
+  previewHistory,
+} from '../services/materialHistory.js';
+import { TencentSheetError } from '../services/tencentSheet.js';
 
 export const materialsRouter = Router();
 materialsRouter.use(requireAuth);
@@ -123,20 +137,68 @@ materialsRouter.get('/history', (req, res) => {
   res.json({ rows: rows.slice((page - 1) * 20, page * 20), total: rows.length });
 });
 
-materialsRouter.post(['/history/preview', '/history/import'], (req, res, next) => {
+materialsRouter.post('/history/preview-url', (req, res, next) => {
   if (!canManageHistory(req.user!)) return res.status(403).json({ error: '仅教学条线或管理员可以导入往期问题' });
   next();
-}, singleUpload(EXCEL_EXTENSIONS), async (req, res) => {
+}, async (req, res) => {
+  const { url } = z.object({ url: z.string().trim().min(1, '请输入文档链接').max(1000) }).parse(req.body ?? {});
+  try {
+    const summary = await createUrlHistoryPreview(req.user!.id, url);
+    if (!summary.rows.length) {
+      return res.status(400).json({ error: '未在文档中找到可识别的问题列（如「存在问题」「具体反馈」）或核查表问题项' });
+    }
+    res.json(summary);
+  } catch (e) {
+    if (e instanceof TencentSheetError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+materialsRouter.post('/history/preview', (req, res, next) => {
+  if (!canManageHistory(req.user!)) return res.status(403).json({ error: '仅教学条线或管理员可以导入往期问题' });
+  next();
+}, singleUpload(HISTORY_UPLOAD_EXTENSIONS), async (req, res) => {
   const file = req.file;
   try {
-    if (!file) return res.status(400).json({ error: '请选择要导入的 Excel' });
+    if (!file) return res.status(400).json({ error: '请选择要导入的表格或文档文件（.xls / .xlsx / .csv / .docx）' });
+    const summary = await createFileHistoryPreview(req.user!.id, file.path, file.originalname);
+    if (!summary.rows.length) {
+      return res.status(400).json({ error: '未找到课程、问题反馈列（如「具体反馈」「存在问题」）或核查表问题项' });
+    }
+    res.json(summary);
+  } catch (e) {
+    if (e instanceof InvalidInputError || e instanceof InvalidSpreadsheetError || e instanceof SheetNotFoundError) {
+      return res.status(400).json({ error: '无法读取表格文件，请检查文件格式' });
+    }
+    throw e;
+  } finally {
+    cleanupTmp(file);
+  }
+});
+
+materialsRouter.post('/history/import', (req, res, next) => {
+  if (!canManageHistory(req.user!)) return res.status(403).json({ error: '仅教学条线或管理员可以导入往期问题' });
+  if (req.is('application/json')) return next();
+  return singleUpload(HISTORY_UPLOAD_EXTENSIONS)(req, res, next);
+}, async (req, res) => {
+  const file = req.file;
+  try {
+    if (req.is('application/json')) {
+      const body = z.object({
+        previewId: z.string().min(1),
+        choices: z.record(z.string(), z.string()),
+      }).parse(req.body ?? {});
+      const cached = consumeCachedPreview(body.previewId, req.user!.id);
+      if (!cached) return res.status(409).json({ error: '预览已过期，请重新读取文档预览后再导入' });
+      const result = importHistory(cached.rows, body.choices, req.user!);
+      if (!result) return res.status(409).json({ error: '课程匹配已变更，请重新预览' });
+      deleteCachedPreview(body.previewId);
+      audit(req.user, '导入往期材料问题', cached.sourceName, `新增 ${result.added}，合并重复 ${result.duplicates}，跳过 ${result.skipped}`, req.ip);
+      return res.json(result);
+    }
+    if (!file) return res.status(400).json({ error: '请选择要导入的文件或使用预览确认导入' });
     const rows = await previewHistory(file.path, file.originalname);
     if (!rows.length) return res.status(400).json({ error: '未找到课程、具体反馈列或可预览的反馈行' });
-    if (req.path.endsWith('/preview')) {
-      const courses = historyCourses().map((course) => ({ ...course, key: courseKey(course) }));
-      return res.json({ courses, rows: rows.map((row) => ({ ...row,
-        candidates: row.candidates.map((course) => ({ ...course, key: courseKey(course) })) })) });
-    }
     const choices = importChoices.parse(req.body.choices);
     const result = importHistory(rows, choices, req.user!);
     if (!result) return res.status(409).json({ error: '课程匹配已变更，请重新预览' });
@@ -144,7 +206,7 @@ materialsRouter.post(['/history/preview', '/history/import'], (req, res, next) =
     res.json(result);
   } catch (e) {
     if (e instanceof InvalidInputError || e instanceof InvalidSpreadsheetError || e instanceof SheetNotFoundError) {
-      return res.status(400).json({ error: '无法读取 Excel，请检查文件格式' });
+      return res.status(400).json({ error: '无法读取表格文件，请检查文件格式' });
     }
     throw e;
   } finally {

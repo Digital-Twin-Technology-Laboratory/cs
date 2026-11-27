@@ -16,6 +16,7 @@ import Profile from './pages/user/Profile';
 import Overview from './pages/user/Overview';
 import Supervision from './pages/user/Supervision';
 import ViewManagement from './pages/user/ViewManagement';
+import IssueArchive from './pages/user/IssueArchive';
 import Dashboard from './pages/admin/Dashboard';
 import Users from './pages/admin/Users';
 import Records from './pages/admin/Records';
@@ -58,7 +59,8 @@ export default function App() {
         <Route index element={<Navigate to="/overview" replace />} />
         <Route path="overview" element={<Overview />} />
         <Route path="supervision" element={<Supervision />} />
-        <Route path="teacher-history" element={<Navigate to="/materials?tab=history" replace />} />
+        <Route path="issue-archive" element={<IssueArchive />} />
+        <Route path="teacher-history" element={<Navigate to="/issue-archive" replace />} />
         <Route path="view-management" element={user && (user.role === 'admin' || user.supervision_manager) ? <ViewManagement /> : <Navigate to="/" replace />} />
         <Route path="upload" element={<Upload />} />
         <Route path="materials" element={<Materials />} />

@@ -9,6 +9,7 @@ import { useAuth } from '../../auth';
 import { UserStatusTag } from '../../components/StatusTag';
 import type { CheckQuota, User } from '../../types';
 import SupervisionRoles from './SupervisionRoles';
+import PersonIssueModal from '../../components/PersonIssueModal';
 
 type Row = User & { course_count: number; submission_count: number; checkQuota: CheckQuota };
 
@@ -32,6 +33,7 @@ export default function Users() {
   const [leaderGroups, setLeaderGroups] = useState<string[]>([]);
   const [groupOptions, setGroupOptions] = useState<{ value: string; label: string }[]>([]);
   const [leaderBusy, setLeaderBusy] = useState(false);
+  const [issuePersonKey, setIssuePersonKey] = useState<string | null>(null);
   const [quotaForm] = Form.useForm();
   const [createForm] = Form.useForm();
   const [pwForm] = Form.useForm();
@@ -220,11 +222,16 @@ export default function Users() {
             },
             {
               title: '课程 / 检查',
-              width: 110,
+              width: 130,
               render: (_, r) => (
-                <Button type="link" size="small" style={{ padding: 0 }} onClick={() => nav(`/admin/records?userId=${r.id}&tab=submissions`)}>
-                  {r.course_count} / {r.submission_count}
-                </Button>
+                <Space orientation="vertical" size={2}>
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => nav(`/admin/records?userId=${r.id}&tab=submissions`)}>
+                    {r.course_count} / {r.submission_count}
+                  </Button>
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setIssuePersonKey(`user:${r.id}`)}>
+                    问题汇总
+                  </Button>
+                </Space>
               ),
             },
             { title: '今日检查次数', width: 170, render: (_, r) => <div className="quota-cell"><b>剩余 {r.checkQuota.remaining} / {r.checkQuota.limit} 次</b><div className="muted small">已完成 {r.checkQuota.used} · 占用 {r.checkQuota.pending}</div><Button size="small" icon={<PlusOutlined />} onClick={() => { quotaForm.resetFields(); setGranting(r); }}>增加次数</Button></div> },
@@ -385,6 +392,7 @@ export default function Users() {
           </Form.Item>
         </Form>
       </Modal>
+      <PersonIssueModal personKey={issuePersonKey} onClose={() => setIssuePersonKey(null)} />
     </div>
   );
 }

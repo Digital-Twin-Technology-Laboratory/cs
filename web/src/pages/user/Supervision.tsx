@@ -8,6 +8,7 @@ import { ConfirmationTag, SubmissionTag } from '../../components/StatusTag';
 import type { SubStatus } from '../../types';
 import StoredNumber, { RestoreStatisticsButton, useStoredNumber } from '../../components/EditableNumber';
 import SubmissionAttachments from '../../components/SubmissionAttachments';
+import PersonIssueModal from '../../components/PersonIssueModal';
 
 export interface RequirementRow {
   id: number;
@@ -61,6 +62,7 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
   const [page, setPage] = useState(1);
   const [confirming, setConfirming] = useState<number | null>(null);
   const [selected, setSelected] = useState<React.Key[]>([]);
+  const [dossierPerson, setDossierPerson] = useState<string | null>(null);
   useEffect(() => { setSelected([]); }, [view, group, program, q, status]);
   useEffect(() => {
     let active = true;
@@ -143,7 +145,7 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
     <Button onClick={() => setRefresh((n) => n + 1)}>刷新进度</Button>
     <RestoreStatisticsButton numbers={resetNumbers} />
     {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/submissions?scope=college"><Button>全院检查记录</Button></Link>}
-    {user && (user.role === 'admin' || user.college_role === 'teaching') && <Link to="/materials?tab=history"><Button>查询历史问题</Button></Link>}
+    <Link to="/issue-archive"><Button>问题记录汇总</Button></Link>
     {user && (user.role === 'admin' || user.supervision_manager === 1) && <Link to="/view-management"><Button>视图与执笔人配置</Button></Link>}
   </Space>;
   return <div className={embedded ? undefined : 'page'}>
@@ -192,9 +194,14 @@ export default function Supervision({ embedded = false }: { embedded?: boolean }
               return <div><StoredNumber {...passedStat} /> / <StoredNumber {...requiredStat} /><div><Tag color={allPassed ? 'success' : undefined}>{allPassed ? '全部已通过' : '尚未全部通过'}</Tag></div></div>;
             } },
             { title: '最终确认 / 应交', width: 140, render: (_, r) => <><StoredNumber {...personStat(r, 'confirmed', r.courses.filter(isConfirmed).length)} /> / <StoredNumber {...personStat(r, 'required', r.courses.length)} /></> },
+            { title: '问题记录', width: 120, render: (_, r) => {
+              const key = r.key.startsWith('user:') ? r.key : r.name ? `name:${r.name.normalize('NFKC').trim().toLowerCase()}` : null;
+              return key ? <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setDossierPerson(key)}>查看问题汇总</Button> : '—';
+            } },
           ]} />
         </> },
       ]} />
     </Card>
+    <PersonIssueModal personKey={dossierPerson} onClose={() => setDossierPerson(null)} />
   </div>;
 }

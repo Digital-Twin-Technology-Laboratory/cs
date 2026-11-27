@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Collapse, Empty, Form, Input, Pagination, Select, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Collapse, Empty, Form, Input, Pagination, Spin, Tabs, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { api, qs } from '../../api';
+import { HistoryImportPanel } from '../../components/HistoryImportModal';
 import { NatureTag } from '../../components/StatusTag';
 
 const url = '/api/materials/history';
@@ -10,9 +11,6 @@ type Teacher = { name: string; staffNo: string };
 type Feedback = { teachers: Teacher[]; text: string; term: string; context: string; source: string; position: string; nature: string };
 export type HistoryIssue = Feedback & { id: string; course: Omit<HistoryCourse, 'key'>; uploader: string; date: string; submissionId?: number;
   outlineDetail?: { title: string; problem: string; advice: string; evidence: string } };
-type PreviewRow = Feedback & { key: string; sheet: string; row: number; course: Omit<HistoryCourse, 'key'>;
-  status: 'matched' | 'ambiguous' | 'unmatched' | 'invalid'; candidates: HistoryCourse[] };
-type Preview = { courses: HistoryCourse[]; rows: PreviewRow[] };
 type HistoryKind = 'history' | 'outline';
 type HistoryGroup = { id: string; issues: HistoryIssue[] };
 type HistoryPage = { groups: HistoryGroup[]; total: number; pageSize: number; counts: Record<HistoryKind, number> };
@@ -25,90 +23,9 @@ const historyTabs = [
 
 export const courseLabel = (course: Omit<HistoryCourse, 'key'>) => [course.name, course.code, course.major].filter(Boolean).join(' · ');
 const teacherLabel = (teacher: Teacher) => teacher.name && teacher.staffNo ? `${teacher.name}（${teacher.staffNo}）` : teacher.name || teacher.staffNo;
-const feedbackText = (text: string) => <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text}</div>;
 
 export function HistoryImport() {
-  const { message } = App.useApp();
-  const [file, setFile] = useState<File>();
-  const [preview, setPreview] = useState<Preview>();
-  const [choices, setChoices] = useState<Record<string, string>>({});
-  const [onlyFlagged, setOnlyFlagged] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [summary, setSummary] = useState('');
-  const load = async (upload: File) => {
-    setBusy(true);
-    setSummary('');
-    try {
-      const body = new FormData();
-      body.set('file', upload);
-      const data = await api.post<Preview>(`${url}/preview`, body);
-      setChoices(Object.fromEntries(data.rows.filter((row) => row.status === 'matched').map((row) => [row.key, row.candidates[0].key])));
-      setPreview(data);
-    } catch (e) { message.error((e as Error).message); }
-    finally { setBusy(false); }
-  };
-  const confirm = async () => {
-    setBusy(true);
-    try {
-      const body = new FormData();
-      body.set('file', file!);
-      body.set('choices', JSON.stringify(choices));
-      const result = await api.post<{ added: number; duplicates: number; skipped: number }>(`${url}/import`, body);
-      setSummary(`已新增 ${result.added} 条，合并重复反馈 ${result.duplicates} 条，跳过 ${result.skipped} 条。`);
-      setPreview(undefined);
-    } catch (e) { message.error((e as Error).message); }
-    finally { setBusy(false); }
-  };
-  const unresolved = preview?.rows.filter((row) => row.status !== 'matched') ?? [];
-  const confirmed = preview?.rows.filter((row) => choices[row.key]).length ?? 0;
-  const canKeep = unresolved.filter((row) => row.status === 'unmatched' && row.course.name);
-  return <Card>
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Alert type="info" showIcon title="上传含多门课程的 .xls 或 .xlsx 文件，无需拆表。"
-        description="使用「课程」或「课程代码」及「具体反馈」列；如有任课教师、工号、学期、来源文件和原表位置，也会一并保留。" />
-      <Space wrap>
-        <input aria-label="选择历史问题 Excel" type="file" accept=".xls,.xlsx" disabled={busy} onChange={(e) => {
-          setFile(e.currentTarget.files?.[0]); setPreview(undefined); setChoices({}); setOnlyFlagged(false); setSummary('');
-        }} />
-        <Button type="primary" disabled={!file || busy} loading={busy && !preview} onClick={() => file && void load(file)}>预览匹配</Button>
-      </Space>
-      {summary && <Alert type="success" showIcon title={summary} />}
-      {preview && <>
-        <Space wrap>
-          <span>共 {preview.rows.length} 条待归档反馈，{unresolved.length} 条需确认，已选 {confirmed} 条。</span>
-          {!!unresolved.length && <Button onClick={() => setOnlyFlagged((value) => !value)}>{onlyFlagged ? '显示全部' : '仅看待确认'}</Button>}
-          {!!canKeep.length && <Button disabled={busy} onClick={() => setChoices((previous) => ({ ...previous,
-            ...Object.fromEntries(canKeep.filter((row) => !previous[row.key]).map((row) => [row.key, 'original'])),
-          }))}>未匹配课程按原表归档</Button>}
-        </Space>
-        <Table rowKey="key" size="small" dataSource={onlyFlagged ? unresolved : preview.rows} scroll={{ x: 960 }} pagination={{ pageSize: 12 }}
-          columns={[
-            { title: 'Excel 位置', width: 135, render: (_, r) => `${r.sheet} · 第 ${r.row} 行` },
-            { title: '原表课程／教师', width: 220, render: (_, r) => <>{courseLabel(r.course)}
-              <div className="muted">{r.teachers.map(teacherLabel).join('、') || '原表未注明教师'}</div></> },
-            { title: '具体反馈', dataIndex: 'text', render: feedbackText },
-            { title: '课程归档确认', width: 290, render: (_, r) => {
-              if (r.status === 'invalid') return <Tag color="red">课程、反馈或教师工号列需修正</Tag>;
-              if (r.status === 'matched') return <><Tag color="green">{r.course.code ? '按代码匹配' : '按名称匹配'}</Tag>{courseLabel(r.candidates[0])}</>;
-              const candidates = r.status === 'ambiguous' ? r.candidates : preview.courses;
-              return <Space orientation="vertical" style={{ width: '100%' }}>
-                <Tag color={r.status === 'ambiguous' ? 'orange' : 'red'}>{r.status === 'ambiguous' ? '同名课程' : '未匹配'}</Tag>
-                <Select aria-label={`确认 ${r.sheet} 第 ${r.row} 行 ${r.course.name || r.course.code} 的课程`} showSearch={{ optionFilterProp: 'label' }}
-                  allowClear disabled={busy} value={choices[r.key]} style={{ width: '100%' }} placeholder="选择归档课程，留空则跳过"
-                  options={[
-                    ...(r.status === 'unmatched' && r.course.name ? [{ value: 'original', label: '按原表课程归档' }] : []),
-                    ...candidates.map((course) => ({ value: course.key, label: courseLabel(course) })),
-                  ]} onChange={(value) => setChoices((previous) => ({ ...previous, [r.key]: value || '' }))} />
-              </Space>;
-            } },
-          ]} />
-        <Space wrap>
-          <Button type="primary" disabled={!confirmed} loading={busy} onClick={() => void confirm()}>确认导入 {confirmed} 条</Button>
-          <span className="muted">{preview.rows.length - confirmed} 条未选择或无效的记录将跳过。</span>
-        </Space>
-      </>}
-    </Space>
-  </Card>;
+  return <Card><HistoryImportPanel /></Card>;
 }
 
 export function HistorySearch() {
