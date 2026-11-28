@@ -54,7 +54,60 @@ const corrections = z.object({
   weights: z.partialRecord(z.enum(['平时', '期中', '实验', '期末']), z.number().min(0).max(100)).nullable().optional(),
   weightsVerified: z.boolean().optional(),
 });
-const listRuns = db.prepare('SELECT id, status, version, error, created_at, finished_at, json_extract(result_json, \'$.verdict\') AS verdict FROM material_runs WHERE case_id = ? ORDER BY id DESC');
+type RunSummaryRow = {
+  id: number;
+  status: MaterialRunRow['status'];
+  version: string;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+  verdict: 'passed' | 'partial' | 'failed' | null;
+  user_id: number;
+  runner_username: string | null;
+  runner_name: string | null;
+};
+type MaterialCaseListRow = MaterialCaseRow & {
+  owner_username: string | null;
+  owner_name: string | null;
+  owner_department: string | null;
+  file_count: number;
+  run_count: number;
+};
+const listRunsStmt = db.prepare(`
+  SELECT r.id, r.status, r.version, r.error, r.created_at, r.finished_at,
+    json_extract(r.result_json, '$.verdict') AS verdict,
+    r.user_id, u.username AS runner_username, u.name AS runner_name
+  FROM material_runs r
+  LEFT JOIN users u ON u.id = r.user_id
+  WHERE r.case_id = ?
+  ORDER BY r.id DESC
+`);
+const listCasesStmt = db.prepare(`
+  SELECT c.*,
+    u.username AS owner_username,
+    u.name AS owner_name,
+    u.department AS owner_department,
+    (SELECT COUNT(*) FROM material_files f WHERE f.case_id = c.id AND f.active = 1) AS file_count,
+    (SELECT COUNT(*) FROM material_runs r WHERE r.case_id = c.id) AS run_count
+  FROM material_cases c
+  LEFT JOIN users u ON u.id = c.user_id
+  ORDER BY c.id DESC
+`);
+const findOwnerStmt = db.prepare('SELECT id, username, name, department FROM users WHERE id = ?');
+const formatRun = (r: RunSummaryRow) => ({
+  id: r.id,
+  status: r.status,
+  version: r.version,
+  error: r.error,
+  created_at: r.created_at,
+  finished_at: r.finished_at,
+  verdict: r.verdict,
+  runner: {
+    id: r.user_id,
+    username: r.runner_username ?? '',
+    name: r.runner_name || r.runner_username || '',
+  },
+});
 const listFiles = db.prepare('SELECT * FROM material_files WHERE case_id = ? AND active = 1 ORDER BY id');
 const caseContents = db.prepare('SELECT 1 FROM material_files WHERE case_id = ? UNION ALL SELECT 1 FROM material_runs WHERE case_id = ? LIMIT 1');
 const canEdit = (user: PublicUser, row: MaterialCaseRow) => row.user_id === user.id || fullAccess(user);
@@ -215,12 +268,29 @@ materialsRouter.post('/history/import', (req, res, next) => {
 });
 
 materialsRouter.get('/', (req, res) => {
-  const rows = db.prepare('SELECT * FROM material_cases ORDER BY id DESC').all() as MaterialCaseRow[];
+  const rows = listCasesStmt.all() as MaterialCaseListRow[];
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json(rows.flatMap((r) => {
     const scope = JSON.parse(r.scope_json) as MaterialScope;
-    return canAccessMaterial(req.user!, scope, r.user_id) ? [{ id: r.id, scope, createdAt: r.created_at,
-      editable: canEdit(req.user!, r), scopeLocked: !!caseContents.get(r.id, r.id), latest: listRuns.get(r.id) ?? null }] : [];
-  }).slice(0, 200));
+    if (!canAccessMaterial(req.user!, scope, r.user_id)) return [];
+    const latest = listRunsStmt.get(r.id) as RunSummaryRow | undefined;
+    return [{
+      id: r.id,
+      scope,
+      createdAt: r.created_at,
+      owner: {
+        id: r.user_id,
+        username: r.owner_username ?? '',
+        name: r.owner_name || r.owner_username || '',
+        department: r.owner_department ?? '',
+      },
+      fileCount: r.file_count,
+      runCount: r.run_count,
+      editable: canEdit(req.user!, r),
+      scopeLocked: !!caseContents.get(r.id, r.id),
+      latest: latest ? formatRun(latest) : null,
+    }];
+  }).slice(0, 2000));
 });
 
 materialsRouter.post('/', (req, res) => {
@@ -241,12 +311,26 @@ materialsRouter.get('/:caseId', (req, res) => {
   const plan = supplied.has(planMaterial) ? undefined : comparisonPlan(entry.scope);
   if (plan) supplied.add(planMaterial);
   const expected = availableMaterials(entry.scope, supplied);
+  const owner = findOwnerStmt.get(entry.row.user_id) as { id: number; username: string; name: string; department: string } | undefined;
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json({
-    id: entry.row.id, scope: entry.scope, version: materialVersion, expected, optional: optionalMaterials(entry.scope, expected),
-    editable: canEdit(req.user!, entry.row), scopeLocked: !!caseContents.get(entry.row.id, entry.row.id),
+    id: entry.row.id,
+    scope: entry.scope,
+    createdAt: entry.row.created_at,
+    owner: {
+      id: entry.row.user_id,
+      username: owner?.username ?? '',
+      name: owner?.name || owner?.username || '',
+      department: owner?.department ?? '',
+    },
+    version: materialVersion,
+    expected,
+    optional: optionalMaterials(entry.scope, expected),
+    editable: canEdit(req.user!, entry.row),
+    scopeLocked: !!caseContents.get(entry.row.id, entry.row.id),
     plan: plan ? { name: plan.name } : null,
     files: files.map((f) => ({ id: f.id, type: f.type, name: f.file_name, grade: GRADE_TYPES.includes(f.type) && !!f.pages_json })),
-    runs: listRuns.all(entry.row.id),
+    runs: (listRunsStmt.all(entry.row.id) as RunSummaryRow[]).map(formatRun),
   });
 });
 

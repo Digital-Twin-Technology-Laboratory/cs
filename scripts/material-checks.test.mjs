@@ -316,7 +316,16 @@ test('course and college material checks preserve scope, quantified differences,
   assert.ok(modelRequests.length > 0);
   assert.doesNotMatch(JSON.stringify(modelRequests), /隐私样例|20260010[12]|正式成绩\.docx/);
   const list = (await teacher(base)).data;
-  assert.ok(list.some((r) => r.id === newCase.data.id && r.editable && r.scopeLocked));
+  const listedCase = list.find((r) => r.id === newCase.data.id);
+  assert.ok(listedCase && listedCase.editable && listedCase.scopeLocked);
+  assert.equal(listedCase.owner.username, 'materials-teacher');
+  assert.equal(listedCase.owner.name, 'Materials Teacher');
+  assert.equal(listedCase.fileCount, 4);
+  assert.equal(listedCase.runCount, 3);
+  assert.equal(listedCase.latest.runner.username, 'materials-teacher');
+  const detailData = (await teacher(course)).data;
+  assert.equal(detailData.owner.username, 'materials-teacher');
+  assert.equal(detailData.runs[0].runner.username, 'materials-teacher');
   assert.equal((await teacher(course, undefined, 'DELETE')).status, 200);
   assert.equal((await teacher(course)).status, 404);
   assert.equal((await teacher(`${course}/files/${gradeId}/original`)).status, 404);
